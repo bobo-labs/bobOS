@@ -1,0 +1,15 @@
+node_modules
+.next
+dist
+.git
+*.md
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+coverage
+bobo.css
+bobo.html
+scratch.js
+setup-domain.sh
