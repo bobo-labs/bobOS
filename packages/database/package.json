@@ -1,0 +1,22 @@
+{
+  "name": "@bobos/database",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.ts",
+  "types": "index.ts",
+  "dependencies": {
+    "drizzle-orm": "^0.30.9",
+    "pg": "^8.11.5"
+  },
+  "scripts": {
+    "db:push": "drizzle-kit push:pg",
+    "db:generate": "drizzle-kit generate:pg",
+    "db:studio": "drizzle-kit studio"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.5",
+    "dotenv": "^16.4.5",
+    "drizzle-kit": "^0.20.17",
+    "typescript": "^5.4.5"
+  }
+}
