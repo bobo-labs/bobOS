@@ -17,7 +17,7 @@ export async function getUserState(walletAddress: string) {
 
 export async function pingAgentForWallet(walletAddress: string) {
   try {
-    const agentUrl = "http://localhost:3001";
+    const agentUrl = process.env.AGENT_URL ?? "http://localhost:3001";
     await fetch(`${agentUrl}/ping-wallet`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -45,7 +45,7 @@ export async function submitChat(walletAddress: string, message: string) {
     }
 
     // 2. Use hardcoded stable agent ID (no dynamic lookup needed)
-    const agentUrl = "http://localhost:3001";
+    const agentUrl = process.env.AGENT_URL ?? "http://localhost:3001";
     const agentId = "bobo-the-bear";
 
     // Sanity-check: make sure the server is alive
