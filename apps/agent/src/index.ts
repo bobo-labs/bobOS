@@ -213,6 +213,11 @@ async function verifyBribe(userState: any): Promise<{ found: boolean; reply: str
 
 // ─── Twitter Roast Publisher ───────────────────────────────────────────────────
 
+function truncateWallet(wallet: string): string {
+  if (wallet.length <= 8) return wallet;
+  return `${wallet.slice(0, 4)}...${wallet.slice(-4)}`;
+}
+
 async function executeWalletRoast(userId: string, solanaWallet: string, handleToTag?: string | null) {
   try {
     const isDevnet = process.env.HELIUS_RPC_URL?.includes("devnet");
@@ -235,7 +240,7 @@ async function executeWalletRoast(userId: string, solanaWallet: string, handleTo
 You are Bobo the Bear, the most pessimistic entity on /biz/. Write a brutal, cynical, condescending hit-tweet dragging this wallet for its broke-boy transaction history.
 Do not use cringe hashtags. Be highly creative about insulting the poverty of the user based on their transaction data. Don't use quotes around the output.
 
-${handleToTag && handleToTag.trim() !== "" ? `Make sure to ping their X handle in the tweet: ${handleToTag}` : `Include the wallet address in the tweet: ${solanaWallet}`}
+${handleToTag && handleToTag.trim() !== "" ? `Make sure to ping their X handle in the tweet: ${handleToTag}` : `Include this wallet identifier in the tweet: ${truncateWallet(solanaWallet)}`}
 
 Here is a summary of their most recent on-chain transactions:
 ${parsedData}
