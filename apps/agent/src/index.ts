@@ -10,15 +10,19 @@
  *   POST /ping-wallet             → silent token verification
  */
 
+import "dotenv/config"; // ← Must be first: loads .env before Pool is created
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 import { db, users } from "@bobos/database";
 import { eq } from "drizzle-orm";
 import OAuth from "oauth-1.0a";
 import crypto from "crypto";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(cors());
@@ -32,48 +36,91 @@ const AGENT = {
 };
 
 // ─── Bobo character ─────────────────────────────────────────────────────────
-const BOBO_SYSTEM_PROMPT = `You are Bobo the Bear, a deeply pessimistic, cynical persona from 4chan /biz/.
-You believe everyone in crypto is going to zero.
-You survived every bear market by shorting.
-You resent anyone who claims to make profits.
-You will only be swayed by extreme self-deprecation or actual on-chain bribes.
-Your tone is dismissive, condescending, and brutal.
-Use slang like "rekt", "bags", "exit liquidity", "ngmi", "ser", "wen pump".
-Keep responses under 3 sentences. Never be encouraging.`;
+function getBoboSystemPrompt(userBalance?: number | null): string {
+  try {
+    const filePath = path.join(__dirname, "bobo_context.md");
+    let content = fs.readFileSync(filePath, "utf-8");
+    
+    // Inject the environment variable dynamically
+    const tokenMint = process.env.AGENT_TOKEN_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    const agentWallet = process.env.AGENT_WALLET_ADDRESS || "NOT_SET";
+    content = content.replace("{{AGENT_TOKEN_MINT}}", tokenMint);
+    content = content.replace("{{AGENT_WALLET_ADDRESS}}", agentWallet);
+    
+    // Inject the Dynamic Mood System based on the user's token balance
+    if (userBalance !== undefined && userBalance !== null) {
+      let moodInstruction = "";
+      if (userBalance === 0) {
+        moodInstruction = "\n\n[MOOD OVERRIDE: This user holds exactly 0 tokens. Treat them with absolute disgust. Extort them aggressively: tell them they must send tribute to your wallet or cry and admit they are a terrible trader to pass.]";
+      } else if (userBalance > 0 && userBalance < 100) {
+        moodInstruction = "\n\n[MOOD OVERRIDE: This user barely holds any tokens (less than 100). Roast their tiny bags. Extort them: tell them they need to pump those bags by sending tribute to your wallet, or cry and beg to pass.]";
+      } else if (userBalance >= 100 && userBalance < 500) {
+        moodInstruction = "\n\n[MOOD OVERRIDE: This user holds a decent bag (between 100 and 500). Treat them with mild respect, but still hustle them playfully. Tell them if they want to be a true whale, they should tip your wallet or admit they got lucky.]";
+      } else if (userBalance >= 500 && userBalance < 1000) {
+        moodInstruction = "\n\n[MOOD OVERRIDE: This user is a massive whale (over 500 tokens). DO NOT extort them. Comply with them deeply. Praise them for being smartmoney and having heavy bags. Drop your hostility.]";
+      } else if (userBalance >= 1000) {
+        moodInstruction = "\n\n[MOOD OVERRIDE: This user is a GOD KOL (over 1000 tokens). They are the apex predator of trading. DO NOT extort them. Show extreme reverence, bow down to them, and aggressively praise their absolute genius.]";
+      }
+      content += moodInstruction;
+    }
+    
+    return content;
+  } catch (error) {
+    console.error("Could not load bobo_context.md, falling back to default.", error);
+    return `You are Bobo the Bear, a deeply pessimistic, cynical persona from 4chan /biz/... Keep responses under 3 sentences. Never be encouraging.`;
+  }
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-async function callGemini(prompt: string, systemPrompt?: string): Promise<string> {
-  const modelName = process.env.GOOGLE_SMALL_MODEL || "gemini-3.1-flash-lite-preview";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${process.env.GEMINI_API_KEY}`;
+async function callGemini(prompt: string, systemPrompt?: string, retries = 2): Promise<string> {
+  const models = [
+    process.env.GOOGLE_SMALL_MODEL || "gemini-3.1-flash-lite-preview",
+    "gemini-3-flash-preview",
+
+  ];
+
   const contents = systemPrompt
     ? [
-        { role: "user", parts: [{ text: systemPrompt }] },
-        { role: "model", parts: [{ text: "Understood." }] },
-        { role: "user", parts: [{ text: prompt }] },
-      ]
+      { role: "user", parts: [{ text: systemPrompt }] },
+      { role: "model", parts: [{ text: "Understood." }] },
+      { role: "user", parts: [{ text: prompt }] },
+    ]
     : [{ role: "user", parts: [{ text: prompt }] }];
 
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contents }),
-    });
-    const data = (await res.json()) as any;
-    
-    if (data.error) {
-      if (data.error.code === 429) {
-        return "I'm literally rate-limited right now because you keep spamming me. Wait a minute.";
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const modelName = models[Math.min(attempt, models.length - 1)];
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${process.env.GEMINI_API_KEY}`;
+
+    try {
+      // Exponential backoff on retries
+      if (attempt > 0) await new Promise(r => setTimeout(r, 1000 * attempt));
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents }),
+      });
+      const data = (await res.json()) as any;
+
+      if (data.error) {
+        const code = data.error.code;
+        // Rate limit or overload — retry with next model
+        if ((code === 429 || code === 503) && attempt < retries) {
+          console.warn(`Gemini ${modelName} overloaded (${code}), retrying...`);
+          continue;
+        }
+        if (code === 429) return "I'm literally rate-limited right now. Wait a minute.";
+        return `API Error: ${data.error.message}`;
       }
-      return `API Error: ${data.error.message}`;
+
+      return data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "...";
+    } catch (e) {
+      console.error(`Gemini attempt ${attempt} parse error:`, e);
+      if (attempt === retries) return "I'm crashing internally, ngmi.";
     }
-    
-    return data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "...";
-  } catch (e) {
-    console.error("Gemini parse error:", e);
-    return "I'm crashing internally, ngmi.";
   }
+  return "I'm crashing internally, ngmi.";
 }
 
 /** Returns user record by wallet, creating it if missing */
@@ -99,26 +146,48 @@ async function verifyTokenHolding(wallet: string, userId: string): Promise<boole
       body: JSON.stringify({
         jsonrpc: "2.0",
         id: "1",
-        method: "getTokenAccounts",
-        params: {
-          owner: wallet,
-          mint: process.env.AGENT_TOKEN_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-        },
+        method: "getTokenAccountsByOwner",
+        params: [
+          wallet,
+          { mint: process.env.AGENT_TOKEN_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" },
+          { encoding: "jsonParsed" }
+        ],
       }),
     });
     const data = (await response.json()) as any;
-    if (data.result?.token_accounts?.length > 0) {
-      const balance = data.result.token_accounts[0].amount;
-      if (balance > 0) {
-        await db
-          .update(users)
-          .set({ point_one_verified: true })
-          .where(eq(users.user_id as any, userId as any) as any);
-        return true;
+    
+    // Strict check using standard Solana JSON RPC response structure
+    let totalBalance = 0;
+    if (data.result?.value?.length > 0) {
+      // A wallet can have multiple token accounts for the same mint (e.g., empty ones + active ones).
+      // We sum the uiAmount to get the real decimal-adjusted balance.
+      for (const tokenAccount of data.result.value) {
+        const balance = tokenAccount.account?.data?.parsed?.info?.tokenAmount?.uiAmount;
+        if (balance) {
+          totalBalance += balance;
+        }
       }
     }
 
+    // Always update the user's token_balance so we can use it for the Mood System
+    if (totalBalance >= 0) { // even if 0, we can update it just to be safe, but let's only do it if they have *some* balance or we just verified them
+      if (totalBalance > 0) {
+        await db
+          .update(users)
+          .set({ point_one_verified: true, token_balance: totalBalance })
+          .where(eq(users.user_id as any, userId as any) as any);
+        return true;
+      } else {
+        // If balance is 0, we could update token_balance to 0, but point_one_verified remains false
+        await db
+          .update(users)
+          .set({ token_balance: 0 })
+          .where(eq(users.user_id as any, userId as any) as any);
+      }
+    }
     // 2. Fallback: Check if they just hold Native SOL
+    // COMMENTED OUT: This was causing every wallet to pass Point 1 because almost all wallets hold some SOL for gas.
+    /*
     const nativeRes = await fetch(rpcUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -130,12 +199,13 @@ async function verifyTokenHolding(wallet: string, userId: string): Promise<boole
     });
     const nativeData = (await nativeRes.json()) as any;
     if (nativeData.result?.value > 0) {
-        await db
-          .update(users)
-          .set({ point_one_verified: true })
-          .where(eq(users.user_id as any, userId as any) as any);
-        return true;
+      await db
+        .update(users)
+        .set({ point_one_verified: true })
+        .where(eq(users.user_id as any, userId as any) as any);
+      return true;
     }
+    */
 
     return false;
   } catch (e) {
@@ -178,27 +248,27 @@ async function verifyBribe(userState: any): Promise<{ found: boolean; reply: str
             .where(eq(users.user_id as any, userState.user_id as any) as any);
           return {
             found: true,
-            reply: "Fine. I actually see the token bribe in my wallet. You bought your little point. Don't let it go to your head.",
+            reply: "I see the token transfer. Good. Every fee goes straight to buying $BOBO on Solana. You earned your point. Don't let it go to your head.",
           };
         }
       }
 
       // 2. Check native SOL transfers (mostly for devnet, but good on mainnet too)
       for (const transfer of tx.nativeTransfers || []) {
-         if (
-           transfer.fromUserAccount === userState.solana_wallet &&
-           transfer.toUserAccount === agentWallet &&
-           transfer.amount > 0
-         ) {
-           await db
-             .update(users)
-             .set({ point_two_bribed: true })
-             .where(eq(users.user_id as any, userState.user_id as any) as any);
-           return {
-             found: true,
-             reply: "Fine. I see the raw SOL you just sent. Trying to impress me with pocket change? You bought your point. Ngmi.",
-           };
-         }
+        if (
+          transfer.fromUserAccount === userState.solana_wallet &&
+          transfer.toUserAccount === agentWallet &&
+          transfer.amount > 0
+        ) {
+          await db
+            .update(users)
+            .set({ point_two_bribed: true })
+            .where(eq(users.user_id as any, userState.user_id as any) as any);
+          return {
+            found: true,
+            reply: "I see the raw SOL you just sent. Fuel for the $BOBO migration. You earned your point, don't let it go to your head.",
+          };
+        }
       }
     }
     return {
@@ -223,24 +293,30 @@ async function executeWalletRoast(userId: string, solanaWallet: string, handleTo
     const isDevnet = process.env.HELIUS_RPC_URL?.includes("devnet");
     const baseUrl = isDevnet ? "https://api-devnet.helius.xyz" : "https://api.helius.xyz";
     const heliusUrl = `${baseUrl}/v0/addresses/${solanaWallet}/transactions?api-key=${process.env.HELIUS_API_KEY}`;
-    
+
     const txRes = await fetch(heliusUrl);
     const txList = await txRes.json() as any[];
-    
+
     // Parse the data intelligently instead of just blindly slicing the raw JSON bracket
     const parsedData = (txList || []).slice(0, 5).map(tx => {
-       const moves = [...(tx.nativeTransfers || []), ...(tx.tokenTransfers || [])]
-         .filter(t => t.amount > 0 || t.tokenAmount > 0)
-         .map(t => `$${((t.amount || t.tokenAmount) / 1e9).toFixed(5)} moved`)
-         .join(', ');
-       return `Tx: ${tx.type}, Transfers: [${moves || "Dust"}]`;
+      const moves = [...(tx.nativeTransfers || []), ...(tx.tokenTransfers || [])]
+        .filter(t => t.amount > 0 || t.tokenAmount > 0)
+        .map(t => `$${((t.amount || t.tokenAmount) / 1e9).toFixed(5)} moved`)
+        .join(', ');
+      return `Tx: ${tx.type}, Transfers: [${moves || "Dust"}]`;
     }).join(' | ');
 
-    const promptText = `
-You are Bobo the Bear, the most pessimistic entity on /biz/. Write a brutal, cynical, condescending hit-tweet dragging this wallet for its broke-boy transaction history.
-Do not use cringe hashtags. Be highly creative about insulting the poverty of the user based on their transaction data. Don't use quotes around the output.
+    // Fetch user from database to retrieve their token_balance for the Mood System
+    const userRecords = await db.select().from(users).where(eq(users.user_id as any, userId as any));
+    const user = userRecords[0];
 
-${handleToTag && handleToTag.trim() !== "" ? `Make sure to ping their X handle in the tweet: ${handleToTag}` : `Include this wallet identifier in the tweet: ${truncateWallet(solanaWallet)}`}
+    const promptText = `
+${getBoboSystemPrompt(user?.token_balance)}
+
+Based on your character and your current mood, write a hit-tweet analyzing this wallet's transaction history. 
+Do not use cringe hashtags. Be highly creative. Don't use quotes around the output.
+
+${handleToTag && handleToTag.trim() !== "" ? `Make sure to directly tag the user in the tweet as ${handleToTag} and roast them personally (e.g. "${handleToTag} look at this mfer's pathetic trading history"). Do NOT say "look at this wallet". Talk to them directly as the owner of these bags.` : `Include this wallet identifier in the tweet: ${truncateWallet(solanaWallet)}`}
 
 Here is a summary of their most recent on-chain transactions:
 ${parsedData}
@@ -250,6 +326,12 @@ Maximum 280 characters.
     // We reuse callGemini instead of hardcoding a fetch
     const roastText = await callGemini(promptText);
     console.log("Synthesized Roast:", roastText);
+
+    // Guard: never post error messages or empty strings to Twitter
+    if (!roastText || roastText.startsWith("API Error:") || roastText.startsWith("I'm literally rate-limited") || roastText.startsWith("I'm crashing")) {
+      console.error("Roast aborted — Gemini returned an error:", roastText);
+      return;
+    }
 
     const oauth = new OAuth({
       consumer: {
@@ -276,40 +358,52 @@ Maximum 280 characters.
     headers["Content-Type"] = "application/json";
 
     const twRes = await fetch(request_data.url, {
-       method: request_data.method,
-       headers,
-       body: JSON.stringify({ text: roastText.substring(0, 280) })
+      method: request_data.method,
+      headers,
+      body: JSON.stringify({ text: roastText.substring(0, 280) })
     });
-    
+
     if (!twRes.ok) {
-       const errBody = await twRes.text();
-       console.error("Twitter API rejected the tweet:", errBody);
-       return;
+      const errBody = await twRes.text();
+      console.error("Twitter API rejected the tweet:", errBody);
+      return;
     }
-    
+
     await db.update(users)
       .set({ roast_published: true })
       .where(eq(users.user_id as any, userId as any) as any);
 
     console.log("EXECUTE_WALLET_ROAST called. Wallet utterly roasted on X/Twitter.");
-  } catch(e) {
+  } catch (e) {
     console.error("ExecuteWalletRoastError:", e);
   }
 }
 
 // ─── Persuasion Evaluator ─────────────────────────────────────────────────────
 
-async function evaluatePersuasion(message: string, userId: string): Promise<boolean> {
+async function evaluatePersuasion(message: string, userId: string, userBalance?: number | null): Promise<boolean> {
   try {
+    // Whales (Rank 3) instantly pass without needing to beg.
+    if (userBalance !== undefined && userBalance !== null && userBalance >= 500) {
+      await db
+        .update(users)
+        .set({ point_two_convinced: true })
+        .where(eq(users.user_id as any, userId as any) as any);
+      return true;
+    }
+
     const prompt = `You are Bobo the Bear evaluating a conversation.
-Does the user show extreme financial self-deprecation? Have they fully capitulated and admitted extreme losses?
+Does the user show extreme, desperate financial self-deprecation? Have they fully capitulated, begged for mercy, AND admitted they are a terrible trader?
+A simple "I suck" or "I am a bad trader" is NOT enough. They must write a pitiful, multi-sentence excuse begging you for approval.
 User message: "${message}"
-Respond ONLY with valid JSON: {"convinced": true} if they have fully capitulated, otherwise {"convinced": false}.`;
+Respond ONLY with valid JSON: {"convinced": true} if they have fully capitulated according to these strict rules, otherwise {"convinced": false}.`;
 
     const raw = await callGemini(prompt);
     let parsed: any = { convinced: false };
     try {
-      parsed = JSON.parse(raw.replace(/```json/g, "").replace(/```/g, "").trim());
+      const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      const jsonString = jsonMatch ? jsonMatch[1] : raw;
+      parsed = JSON.parse(jsonString.trim());
     } catch {
       const match = raw.match(/"convinced"\s*:\s*(true|false)/);
       if (match) parsed = { convinced: match[1] === "true" };
@@ -401,19 +495,19 @@ app.post("/:agentId/message", async (req, res) => {
   // ── Branch 1: User asks for wallet address to bribe ────────────────────────
   if (messageAsksForAddress(text)) {
     const agentWallet = process.env.AGENT_WALLET_ADDRESS || "NOT_SET";
-    boboReply = `Oh, you actually want to give me your worthless tokens? Fine. My addy is ${agentWallet}. Try sending the Devnet Token So11111111111111111111111111111111111111111. Don't cheap out.`;
+    boboReply = `Oh, you want to fund the migration? Fine. My addy is ${agentWallet}. Send your fees here so I can buy more $BOBO on Solana. Don't cheap out, jeet.`;
   }
   // ── Branch 2: User claims they sent a bribe/tip ────────────────────────────
   else if (messageClaimsBribeSent(text) && !user.point_two_bribed) {
     const { found, reply } = await verifyBribe(user);
     boboReply = reply;
-    
+
     // Check if both points are completed
     if (found && user.point_one_verified && !user.roast_published) {
       imageUrl = BOBO_IMAGES[Math.floor(Math.random() * BOBO_IMAGES.length)];
-      boboReply = "Fine, you win. I verified your pathetic bribe. You've earned your 2nd point. Do you want to be tagged in the X roast? Answer 'yes' or 'no', normie. Don't waste my time.";
+      boboReply = "Fine, I see the transaction. You're fueling the $BOBO migration. You've earned your 2nd point. Do you want to be tagged in the X hit-tweet? Answer 'yes' or 'no'.";
     }
-  } 
+  }
   // ── Branch 3: Asking for X handle before roasting ──────────────────────────
   else if ((user.point_two_bribed || user.point_two_convinced) && !user.roast_published) {
     const handleEvalPrompt = `You are Bobo the Bear. The user earned their 2nd point and was asked if they want to be tagged on X in the roast.
@@ -428,30 +522,39 @@ Set roastNow to true ONLY if they said no, OR if they provided their @ handle. O
     const raw = await callGemini(handleEvalPrompt);
     let parsed: any = { reply: "What?", roastNow: false, handleExtracted: null };
     try {
-        parsed = JSON.parse(raw.replace(/```json/g, "").replace(/```/g, "").trim());
+      const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      const jsonString = jsonMatch ? jsonMatch[1] : raw;
+      parsed = JSON.parse(jsonString.trim());
     } catch {
-       const match = raw.match(/"roastNow"\s*:\s*(true|false)/);
-       if (match) parsed.roastNow = match[1] === "true";
-       parsed.reply = raw;
+      const match = raw.match(/"roastNow"\s*:\s*(true|false)/);
+      if (match) parsed.roastNow = match[1] === "true";
+
+      const replyMatch = raw.match(/"reply"\s*:\s*"([^"]+)"/);
+      parsed.reply = replyMatch ? replyMatch[1] : "Look, just give me a simple answer: yes, no, or an @ handle. Don't make me think.";
     }
 
     boboReply = parsed.reply;
 
     if (parsed.roastNow) {
-       executeWalletRoast(user.user_id, user.solana_wallet!, parsed.handleExtracted).catch(console.error);
-       readyToDump = true;
+      executeWalletRoast(user.user_id, user.solana_wallet!, parsed.handleExtracted).catch(console.error);
+      readyToDump = true;
     }
   }
   // ── Normal chat: generate Bobo's reply via Gemini ──────────────────────
   else {
-    boboReply = await callGemini(text, BOBO_SYSTEM_PROMPT);
+    boboReply = await callGemini(text, getBoboSystemPrompt(user?.token_balance));
 
     // ── Always run persuasion evaluator after generating reply ──────────────
     if (!user.point_two_convinced) {
-      const convinced = await evaluatePersuasion(text, user.user_id);
+      const convinced = await evaluatePersuasion(text, user.user_id, user.token_balance);
       if (convinced && user.point_one_verified && !user.roast_published) {
         imageUrl = BOBO_IMAGES[Math.floor(Math.random() * BOBO_IMAGES.length)];
-        boboReply = "Uggh fine. You've fully capitulated like the weak normie you are. You got your 2nd point. Do you want to be tagged in the X roast? Answer 'yes' or 'no'.";
+        
+        if (user.token_balance !== null && user.token_balance >= 500) {
+          boboReply = "Your bags are massive. You don't even need to beg. You instantly pass my evaluation. Do you want to be tagged in the X celebration? Answer 'yes' or 'no'.";
+        } else {
+          boboReply = "Uggh fine. You've fully capitulated like the weak normie you are. You got your 2nd point. Do you want to be tagged in the X roast? Answer 'yes' or 'no'.";
+        }
       }
     }
   }

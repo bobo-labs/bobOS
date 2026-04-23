@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, boolean } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, boolean, doublePrecision } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
   user_id: uuid("user_id").primaryKey().defaultRandom(),
@@ -6,5 +6,6 @@ export const users = pgTable("users", {
   point_one_verified: boolean("point_one_verified").default(false),
   point_two_convinced: boolean("point_two_convinced").default(false),
   point_two_bribed: boolean("point_two_bribed").default(false),
-  roast_published: boolean("roast_published").default(false)
+  roast_published: boolean("roast_published").default(false),
+  token_balance: doublePrecision("token_balance").default(0)
 });

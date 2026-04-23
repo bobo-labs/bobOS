@@ -9,7 +9,13 @@ export async function getUserState(walletAddress: string) {
   
   if (!user) {
     // Insert user if they connect for the first time
-    const [newUser] = await db.insert(users).values({ solana_wallet: walletAddress }).returning();
+    const [newUser] = await db.insert(users).values({ 
+      solana_wallet: walletAddress,
+      point_one_verified: false,
+      point_two_convinced: false,
+      point_two_bribed: false,
+      roast_published: false
+    }).returning();
     return newUser;
   }
   return user;
