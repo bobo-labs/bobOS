@@ -18,6 +18,21 @@ export async function getUserState(walletAddress: string) {
     }).returning();
     return newUser;
   }
+  // Cooldown logic check
+  if (user.roast_published && user.last_roast_published_at) {
+    const diffMs = Date.now() - new Date(user.last_roast_published_at).getTime();
+    const cooldownMs = 6 * 60 * 60 * 1000;
+    if (diffMs >= cooldownMs) {
+       // Reset user to play again (they keep point 1 if they still hold tokens, but must earn point 2 again)
+       const [updatedUser] = await db.update(users).set({ 
+         roast_published: false,
+         point_two_bribed: false,
+         point_two_convinced: false
+       }).where(eq(users.solana_wallet, walletAddress)).returning();
+       return updatedUser;
+    }
+  }
+
   return user;
 }
 
@@ -101,4 +116,27 @@ export async function submitChat(walletAddress: string, message: string) {
   }
   
   return { reply: replyText, image: replyImage, convinced: convincedOrBribed, readyToDump: isReadyToDump };
+}
+
+export async function wipeUserProgress(walletAddress: string) {
+  if (!walletAddress) return;
+  await db.update(users).set({
+    point_one_verified: false,
+    point_two_convinced: false,
+    point_two_bribed: false,
+    token_balance: 0,
+    persuasion_attempts: 0
+  }).where(eq(users.solana_wallet, walletAddress));
+
+  // Clear in-memory chat history on the agent server
+  try {
+    const agentUrl = process.env.AGENT_URL ?? "http://localhost:3001";
+    await fetch(`${agentUrl}/clear-history`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ walletAddress }),
+    });
+  } catch (e) {
+    console.error("Failed to clear agent chat history:", e);
+  }
 }

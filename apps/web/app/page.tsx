@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import dynamic from "next/dynamic";
-import { getUserState, submitChat, pingAgentForWallet } from "./actions";
+import { getUserState, submitChat, pingAgentForWallet, wipeUserProgress } from "./actions";
 import AsciiBobo from "../components/AsciiBobo";
 import AsciiBoboMobile from "../components/AsciiBoboMobile";
 
@@ -29,7 +29,9 @@ export default function Home() {
   const [isTyping, setIsTyping] = useState(false);
   // The meme shown while waiting for Bobo's reply (null = no meme)
   const [typingMeme, setTypingMeme] = useState<string | null>(null);
-  
+
+  const [cooldownTimeLeft, setCooldownTimeLeft] = useState<string | null>(null);
+
   // Controls the 6-second delay between winning point 2 and showing the Satisfied screen
   const [completionTransitioned, setCompletionTransitioned] = useState(false);
 
@@ -40,18 +42,32 @@ export default function Home() {
 
   // ── Draggable window — all refs, zero React re-renders during drag ─────────────
   const containerRef = useRef<HTMLDivElement>(null);
-  const isDragging   = useRef(false);
-  const startMouse   = useRef({ x: 0, y: 0 });
-  const startPos     = useRef({ x: 0, y: 0 });
-  const currentPos   = useRef({ x: 0, y: 0 });
+  const isDragging = useRef(false);
+  const startMouse = useRef({ x: 0, y: 0 });
+  const startPos = useRef({ x: 0, y: 0 });
+  const currentPos = useRef({ x: 0, y: 0 });
 
   useEffect(() => {
     const el = chatScrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [chatMessages, isTyping]);
 
+  const previousPublicKey = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (connected && publicKey) {
+      previousPublicKey.current = publicKey.toBase58();
+    }
+  }, [connected, publicKey]);
+
   useEffect(() => {
     if (!connected || !publicKey) {
+      // If we just disconnected, wipe their session progress
+      if (previousPublicKey.current) {
+        wipeUserProgress(previousPublicKey.current).catch(console.error);
+        previousPublicKey.current = null;
+      }
+
       setUserData(null);
       setIsChatOpen(false);
       setChatMessages([]);
@@ -63,18 +79,46 @@ export default function Home() {
       try {
         const data = await getUserState(publicKey.toBase58());
         setUserData(data);
-        
+
+        // Update cooldown timer if they are in the roasted state
+        if (data?.roast_published && data?.last_roast_published_at) {
+          const publishedAt = new Date(data.last_roast_published_at).getTime();
+          const unlockTime = publishedAt + (6 * 60 * 60 * 1000);
+          const diff = unlockTime - Date.now();
+          if (diff > 0) {
+            const h = Math.floor(diff / (1000 * 60 * 60));
+            const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+            const s = Math.floor((diff % (1000 * 60)) / 1000);
+            setCooldownTimeLeft(`${h}h ${m}m ${s}s`);
+          } else {
+            setCooldownTimeLeft(null);
+          }
+        }
+
         // If they connected but aren't verified yet, ping the agent ONCE
         if (data && !data.point_one_verified && !hasPinged.current) {
-           hasPinged.current = true;
-           pingAgentForWallet(publicKey.toBase58()).catch(console.error);
+          hasPinged.current = true;
+          pingAgentForWallet(publicKey.toBase58()).catch(console.error);
         }
       } catch (err) {
         console.error("Polling error:", err);
       }
     }, 3000);
 
-    getUserState(publicKey.toBase58()).then(data => setUserData(data)).catch(console.error);
+    // Initial fetch to set everything
+    getUserState(publicKey.toBase58()).then(data => {
+      setUserData(data);
+      if (data?.roast_published && data?.last_roast_published_at) {
+        const publishedAt = new Date(data.last_roast_published_at).getTime();
+        const unlockTime = publishedAt + (6 * 60 * 60 * 1000);
+        const diff = unlockTime - Date.now();
+        if (diff > 0) {
+          const h = Math.floor(diff / (1000 * 60 * 60));
+          const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+          setCooldownTimeLeft(`${h}h ${m}m`);
+        }
+      }
+    }).catch(console.error);
 
     return () => clearInterval(interval);
   }, [connected, publicKey]);
@@ -88,7 +132,7 @@ export default function Home() {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     // offsetWidth / offsetHeight give layout dimensions ignoring transform
-    const maxX = Math.max(0, (vw - el.offsetWidth)  / 2);
+    const maxX = Math.max(0, (vw - el.offsetWidth) / 2);
     const maxY = Math.max(0, (vh - el.offsetHeight) / 2);
     const cx = Math.min(Math.max(x, -maxX), maxX);
     const cy = Math.min(Math.max(y, -maxY), maxY);
@@ -100,7 +144,7 @@ export default function Home() {
   const onDragHandleMouseDown = useCallback((e: React.MouseEvent) => {
     isDragging.current = true;
     startMouse.current = { x: e.clientX, y: e.clientY };
-    startPos.current   = { ...currentPos.current };
+    startPos.current = { ...currentPos.current };
     document.body.style.userSelect = 'none';
     e.preventDefault();
   }, []);
@@ -108,7 +152,7 @@ export default function Home() {
   const onDragHandleTouchStart = useCallback((e: React.TouchEvent) => {
     isDragging.current = true;
     startMouse.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-    startPos.current   = { ...currentPos.current };
+    startPos.current = { ...currentPos.current };
   }, []);
 
   const onMouseMove = useCallback((e: MouseEvent) => {
@@ -141,14 +185,14 @@ export default function Home() {
   // Window-level listeners for drag tracking
   useEffect(() => {
     window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup',   onMouseUp);
+    window.addEventListener('mouseup', onMouseUp);
     window.addEventListener('touchmove', onTouchMove, { passive: false });
-    window.addEventListener('touchend',  onTouchEnd);
+    window.addEventListener('touchend', onTouchEnd);
     return () => {
       window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup',   onMouseUp);
+      window.removeEventListener('mouseup', onMouseUp);
       window.removeEventListener('touchmove', onTouchMove);
-      window.removeEventListener('touchend',  onTouchEnd);
+      window.removeEventListener('touchend', onTouchEnd);
     };
   }, [onMouseMove, onMouseUp, onTouchMove, onTouchEnd]);
 
@@ -191,18 +235,26 @@ export default function Home() {
       <AsciiBobo />
       {/* Mobile-only: top-right corner art — hidden on sm+ inside the component */}
       <AsciiBoboMobile />
-      
-      <div className="absolute top-2 left-2 md:top-4 md:left-4 z-50">
-        <a href="https://www.bobothebear.io/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 sm:gap-4 hover:scale-[1.05] transition-transform duration-0">
+
+      <div className="absolute top-2 left-2 right-2 md:top-4 md:left-4 md:right-4 z-50 flex items-center justify-between pointer-events-none">
+        <a href="https://www.bobothebear.io/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 sm:gap-4 hover:scale-[1.05] transition-transform duration-0 pointer-events-auto">
           <img src="/images/bobo-logo.png" alt="Bobo Logo" className="w-10 sm:w-14 md:w-20" />
           <img src="/images/bobo-logotype.png" alt="Bobo" className="h-4 sm:h-6 md:h-8" />
         </a>
+
+        {/* High Score Badge - Outside Chatbox */}
+        {connected && (
+          <div className="font-black text-xs sm:text-base bg-[#fee1bf] text-[#261c1a] py-1 px-2 sm:py-2 sm:px-4 sketch-border border-[2px] sm:border-[3px] border-[#261c1a] shadow-[2px_2px_0_0_#261c1a] uppercase tracking-wide whitespace-nowrap flex items-center gap-1 sm:gap-2 transform hover:rotate-2 transition-transform cursor-help pointer-events-auto mr-[70px] sm:mr-0" title="Number of times Bobo has roasted you. Make it go higher.">
+            <span className="text-base sm:text-xl leading-none drop-shadow-[1px_1px_0_rgba(0,0,0,0.5)]">👑</span>
+            <span>Tributes: {userData?.roasts_count || 0}</span>
+          </div>
+        )}
       </div>
 
       <div
         ref={containerRef}
         className={`w-full max-w-5xl lg:max-w-6xl sketch-border p-2 sm:p-3 md:p-5 bg-[#6f452d] text-[#fee1bf] border-[4px] border-[#261c1a] relative z-10 shadow-[8px_8px_0_0_#261c1a]${(isChatOpen && !completionTransitioned) ? ' flex flex-col h-[calc(100vh-4.5rem)] sm:h-[calc(100vh-2rem)]' : ''}`}
-        style={{ }}
+        style={{}}
       >
         {/* Drag handle — grab the title bar to move the window */}
         <h1
@@ -253,17 +305,29 @@ export default function Home() {
             </div>
 
             {!isChatOpen && (
-              <p className="font-bold text-base sm:text-xl md:text-3xl text-center leading-tight">Bobo has accepted your tokens. Now, choose your path of capitulation.</p>
+              <p className="font-bold text-base sm:text-xl md:text-3xl text-center leading-tight">Bobo has acknowledged your bags. Step inside and face his judgment.</p>
             )}
 
             {!isChatOpen ? (
               <div className="flex justify-center w-full">
                 <button
-                  onClick={() => setIsChatOpen(true)}
+                  onClick={() => {
+                    setIsChatOpen(true);
+                    if (chatMessages.length === 0) {
+                      const balance = userData?.token_balance || 0;
+                      let initialMsg = "Hello? Who even are you lmao. You rolled in here with zero tokens. Zero. I'm not even gonna roast you — you don't deserve the energy. Go buy some $BOBO and come back when you're someone.";
+                      if (balance > 0 && balance < 100) initialMsg = "Oh wow, look who showed up. Hey little guy. Those are... some bags you got there. Adorable. Listen, I don't hate you — I just feel sorry for you. You're gonna have to REALLY embarrass yourself if you want anything from me. Just so you know.";
+                      else if (balance >= 100 && balance < 500) initialMsg = "Sup. You made it in. Look, I respect the move — you're not totally ngmi. But let's be real, you're not smartmoney yet either. You're in that awkward middle zone. I'm watching you. Show me something.";
+                      else if (balance >= 500 && balance < 1000) initialMsg = "Hey. Yeah, I see you. And I'll be honest — you got my attention. Not many people walk in here and actually have conviction. You're close to the real tier, but close ain't there yet. I'm curious what you're gonna do with that. Impress me.";
+                      else if (balance >= 1000) initialMsg = "Heyyy, look who's here. Genuinely — welcome. I don't say that to just anyone. You're actually one of us. Grab a seat, we can talk like equals for once. What's on your mind?";
+
+                      setChatMessages([{ sender: "Bobo", text: initialMsg }]);
+                    }
+                  }}
                   className="bg-[#be0129] text-[#fee1bf] p-3 sm:p-4 text-base sm:text-xl md:text-2xl font-black sketch-border border-[4px] border-[#261c1a] uppercase text-center hover:bg-[#fee1bf] hover:text-[#261c1a] hover:translate-x-[4px] hover:translate-y-[4px] shadow-[4px_4px_0_0_#261c1a] transition-all duration-0 cursor-pointer max-w-[280px] sm:max-w-sm md:max-w-lg w-full"
                 >
-                  BEG FOR MERCY OR SEND TX<br />
-                  <span className="text-xs sm:text-sm md:text-base font-normal lowercase block mt-1 sm:mt-2 opacity-90">(convince or bribe me... let's chat you worthless normie)</span>
+                  BEG FOR MERCY U FKN NORMIE<br />
+                  <span className="text-xs sm:text-sm md:text-base font-normal lowercase block mt-1 sm:mt-2 opacity-90">(convince or bribe me... let's chat you worthless degen)</span>
                 </button>
               </div>
             ) : (
@@ -294,8 +358,8 @@ export default function Home() {
                     {chatMessages.length === 0 && <p className="text-lg font-bold opacity-60 text-center mt-6">Go ahead, whine about your bags.</p>}
                     {chatMessages.map((m, i) => (
                       <div key={i} className={`p-3 border-[2px] border-[#261c1a] max-w-[80%] rounded-[15px] ${m.sender === 'Bobo' ? 'bg-[#be0129] text-[#fee1bf] self-start' : 'bg-[#6f452d] text-[#fee1bf] self-end'}`}>
-                        <span className="font-black text-sm block uppercase text-[#fee1bf]">{m.sender}:</span>
-                        <span className="font-bold text-base md:text-lg block break-words text-[#fee1bf] leading-snug whitespace-pre-wrap">{m.text}</span>
+                        <span className="font-black text-sm lg:text-lg block uppercase text-[#fee1bf]">{m.sender}:</span>
+                        <span className="font-bold text-base md:text-lg lg:text-2xl block break-words text-[#fee1bf] leading-snug whitespace-pre-wrap">{m.text}</span>
                         {m.image && (
                           <div className="mt-2 flex items-center justify-center">
                             <img
@@ -385,6 +449,16 @@ export default function Home() {
           <div className="w-full p-8 border-[4px] border-[#261c1a] shadow-[4px_4px_0_0_#261c1a] bg-[#fee1bf] text-[#261c1a] rounded-[15px_225px_15px_255px/255px_15px_225px_15px] flex flex-col items-center justify-center gap-6">
             <p className="font-black text-6xl uppercase text-center text-[#be0129]">WALLET ROASTED</p>
             <p className="font-bold text-center text-3xl md:text-4xl leading-tight">Your on-chain embarrassment is now public.</p>
+
+            <div className="bg-[#6f452d] text-[#fee1bf] p-4 w-full max-w-md border-[3px] border-[#261c1a] sketch-border flex flex-col items-center gap-2 mt-4">
+              <span className="font-black text-2xl uppercase">Total Tributes: {userData?.roasts_count || 1}</span>
+              <p className="text-center font-bold text-lg opacity-90">Bobo is resting. Come back in:</p>
+              <span className="font-black text-4xl text-[#be0129] bg-[#fee1bf] px-4 py-2 sketch-border border-2 border-[#261c1a]">
+                {cooldownTimeLeft || "calculating..."}
+              </span>
+              <p className="text-sm opacity-70 mt-2 font-bold uppercase">To get roasted again</p>
+            </div>
+
             <div className="mt-4">
               <WalletMultiButton />
             </div>
