@@ -140,3 +140,16 @@ export async function wipeUserProgress(walletAddress: string) {
     console.error("Failed to clear agent chat history:", e);
   }
 }
+
+export async function getLeaderboard(): Promise<{ rank: number; wallet: string; roasts_count: number }[]> {
+  try {
+    const agentUrl = process.env.AGENT_URL ?? "http://localhost:3001";
+    const res = await fetch(`${agentUrl}/leaderboard`, { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.leaderboard ?? [];
+  } catch (e) {
+    console.error("Failed to fetch leaderboard:", e);
+    return [];
+  }
+}

@@ -696,6 +696,33 @@ app.post("/ping-wallet", async (req, res) => {
   return res.json({ ok: true, verified });
 });
 
+// Top-3 leaderboard by roasts_count
+app.get("/leaderboard", async (_req, res) => {
+  try {
+    const top3 = await db
+      .select({
+        wallet: users.solana_wallet,
+        roasts_count: users.roasts_count,
+      })
+      .from(users)
+      .orderBy(sql`${users.roasts_count} DESC`)
+      .limit(3);
+
+    const formatted = top3.map((u, i) => ({
+      rank: i + 1,
+      wallet: u.wallet
+        ? `${u.wallet.substring(0, 4)}...${u.wallet.substring(u.wallet.length - 4)}`
+        : "???",
+      roasts_count: u.roasts_count ?? 0,
+    }));
+
+    return res.json({ leaderboard: formatted });
+  } catch (e) {
+    console.error("Leaderboard error:", e);
+    return res.json({ leaderboard: [] });
+  }
+});
+
 // Main chat endpoint — same path pattern frontend uses: POST /:agentId/message
 app.post("/:agentId/message", async (req, res) => {
   const { agentId } = req.params;

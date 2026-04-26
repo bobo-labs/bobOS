@@ -258,3 +258,20 @@ body {
     font-size: 0.9rem !important;
   }
 }
+
+/* ─── Tributes Leaderboard Dropdown ──────────────────────────────────────── */
+.tributes-dropdown {
+  transform-origin: top center;
+  transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1), transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.2s;
+  opacity: 0;
+  transform: translateY(-8px) scaleY(0.85);
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.tributes-dropdown.open {
+  opacity: 1;
+  transform: translateY(0) scaleY(1);
+  visibility: visible;
+  pointer-events: auto;
+}

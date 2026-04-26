@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import dynamic from "next/dynamic";
-import { getUserState, submitChat, pingAgentForWallet, wipeUserProgress } from "./actions";
+import { getUserState, submitChat, pingAgentForWallet, wipeUserProgress, getLeaderboard } from "./actions";
 import AsciiBobo from "../components/AsciiBobo";
 import AsciiBoboMobile from "../components/AsciiBoboMobile";
 
@@ -34,6 +34,26 @@ export default function Home() {
 
   // Controls the 6-second delay between winning point 2 and showing the Satisfied screen
   const [completionTransitioned, setCompletionTransitioned] = useState(false);
+
+  // Leaderboard dropdown
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [leaderboard, setLeaderboard] = useState<{ rank: number; wallet: string; roasts_count: number }[]>([]);
+  const [leaderboardLoaded, setLeaderboardLoaded] = useState(false);
+  const leaderboardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleTributesMouseEnter = useCallback(async () => {
+    if (leaderboardTimerRef.current) clearTimeout(leaderboardTimerRef.current);
+    setShowLeaderboard(true);
+    if (!leaderboardLoaded) {
+      const data = await getLeaderboard();
+      setLeaderboard(data);
+      setLeaderboardLoaded(true);
+    }
+  }, [leaderboardLoaded]);
+
+  const handleTributesMouseLeave = useCallback(() => {
+    leaderboardTimerRef.current = setTimeout(() => setShowLeaderboard(false), 180);
+  }, []);
 
   // Ref on the scroll container itself — scrollTop approach only scrolls
   // the chat div, never the page (scrollIntoView was causing logo cut-off)
@@ -236,18 +256,78 @@ export default function Home() {
       {/* Mobile-only: top-right corner art — hidden on sm+ inside the component */}
       <AsciiBoboMobile />
 
-      <div className="absolute top-2 left-2 right-2 md:top-4 md:left-4 md:right-4 z-50 flex items-center justify-between pointer-events-none">
-        <a href="https://www.bobothebear.io/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 sm:gap-4 hover:scale-[1.05] transition-transform duration-0 pointer-events-auto">
+      <div className="absolute top-2 left-2 right-2 md:top-4 md:left-4 md:right-4 z-50 pointer-events-none">
+        <a href="https://www.bobothebear.io/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 sm:gap-4 hover:scale-[1.05] transition-transform duration-0 pointer-events-auto w-fit">
           <img src="/images/bobo-logo.png" alt="Bobo Logo" className="w-10 sm:w-14 md:w-20" />
           <img src="/images/bobo-logotype.png" alt="Bobo" className="h-4 sm:h-6 md:h-8" />
         </a>
 
-        {/* High Score Badge - Outside Chatbox */}
+        {/* High Score Badge — Desktop dropdown, mobile centered static badge */}
         {connected && (
-          <div className="font-black text-xs sm:text-base bg-[#fee1bf] text-[#261c1a] py-1 px-2 sm:py-2 sm:px-4 sketch-border border-[2px] sm:border-[3px] border-[#261c1a] shadow-[2px_2px_0_0_#261c1a] uppercase tracking-wide whitespace-nowrap flex items-center gap-1 sm:gap-2 transform hover:rotate-2 transition-transform cursor-help pointer-events-auto mr-[70px] sm:mr-0" title="Number of times Bobo has roasted you. Make it go higher.">
-            <span className="text-base sm:text-xl leading-none drop-shadow-[1px_1px_0_rgba(0,0,0,0.5)]">👑</span>
-            <span>Tributes: {userData?.roasts_count || 0}</span>
-          </div>
+          <>
+            {/* DESKTOP ONLY: interactive dropdown in top-right */}
+            <div
+              className="hidden md:block absolute top-0 right-0 pointer-events-auto"
+              onMouseEnter={handleTributesMouseEnter}
+              onMouseLeave={handleTributesMouseLeave}
+            >
+              {/* Trigger button */}
+              <button
+                className="font-black text-sm bg-[#fee1bf] text-[#261c1a] py-2 px-4 sketch-border border-[3px] border-[#261c1a] shadow-[2px_2px_0_0_#261c1a] uppercase tracking-wide whitespace-nowrap flex items-center gap-2 hover:bg-[#6f452d] hover:text-[#fee1bf] transition-colors duration-150 cursor-pointer"
+              >
+                <span className="text-xl leading-none">👑</span>
+                <span>Tributes: {userData?.roasts_count || 0}</span>
+              </button>
+
+              {/* Dropdown panel */}
+              <div className={`tributes-dropdown absolute top-full right-0 mt-2 w-64 bg-[#6f452d] sketch-border border-[3px] border-[#261c1a] shadow-[4px_4px_0_0_#261c1a] z-50 overflow-hidden ${showLeaderboard ? 'open' : ''}`}>
+                {/* Header */}
+                <div className="text-[#fee1bf] px-4 py-2 flex items-center gap-2 border-b-[2px] border-[#261c1a]">
+                  <span className="text-lg">👑</span>
+                  <span className="font-black uppercase text-sm tracking-widest">King Board</span>
+                </div>
+
+                {/* Rows */}
+                <div className="flex flex-col">
+                  {leaderboard.length === 0 ? (
+                    <div className="px-4 py-6 text-center font-bold text-[#fee1bf] opacity-60 text-sm uppercase">
+                      No tributes yet.<br />Be the first.
+                    </div>
+                  ) : (
+                    leaderboard.map((entry) => {
+                      const medal = entry.rank === 1 ? '🥇' : entry.rank === 2 ? '🥈' : '🥉';
+                      return (
+                        <div
+                          key={entry.rank}
+                          className="flex items-center justify-between px-4 py-3 border-b-[2px] border-[#261c1a] last:border-b-0 text-[#fee1bf]"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-xl leading-none">{medal}</span>
+                            <span className="font-black text-sm uppercase tracking-wide font-mono">{entry.wallet}</span>
+                          </div>
+                          <div className="flex flex-col items-end">
+                            <span className="font-black text-lg leading-none">{entry.roasts_count}</span>
+                            <span className="text-[10px] uppercase opacity-60 font-bold">roasts</span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Footer */}
+                <div className="bg-[#be0129] text-[#fee1bf] px-4 py-2 text-center border-t-[2px] border-[#261c1a]">
+                  <span className="font-black text-xs uppercase tracking-widest">Make it go higher 📈</span>
+                </div>
+              </div>
+            </div>
+
+            {/* MOBILE ONLY: static centered badge, no dropdown */}
+            <div className="block md:hidden absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 font-black text-xs bg-[#fee1bf] text-[#261c1a] py-1 px-2 sketch-border border-[2px] border-[#261c1a] shadow-[2px_2px_0_0_#261c1a] uppercase tracking-wide whitespace-nowrap flex items-center gap-1 pointer-events-auto">
+              <span className="text-base leading-none">👑</span>
+              <span>Tributes: {userData?.roasts_count || 0}</span>
+            </div>
+          </>
         )}
       </div>
 
