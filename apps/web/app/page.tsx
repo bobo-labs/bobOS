@@ -2,6 +2,9 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { useConnection } from "@solana/wallet-adapter-react";
+import { PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
+import { createTransferCheckedInstruction, getAssociatedTokenAddress, getAccount, createAssociatedTokenAccountInstruction } from "@solana/spl-token";
 import dynamic from "next/dynamic";
 import { getUserState, submitChat, pingAgentForWallet, wipeUserProgress, getLeaderboard } from "./actions";
 import AsciiBobo from "../components/AsciiBobo";
@@ -21,10 +24,11 @@ const BOBO_MEMES = [
 ];
 
 export default function Home() {
-  const { publicKey, connected } = useWallet();
+  const { publicKey, connected, sendTransaction } = useWallet();
+  const { connection } = useConnection();
   const [userData, setUserData] = useState<any>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const [chatMessages, setChatMessages] = useState<{ sender: string, text: string, image?: string }[]>([]);
+  const [chatMessages, setChatMessages] = useState<{ sender: string, text: string, image?: string, jupiterUrl?: string }[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   // The meme shown while waiting for Bobo's reply (null = no meme)
@@ -34,6 +38,17 @@ export default function Home() {
 
   // Controls the 6-second delay between winning point 2 and showing the Satisfied screen
   const [completionTransitioned, setCompletionTransitioned] = useState(false);
+
+  // Animation frame for sleeping Bobo
+  const [sleepFrame, setSleepFrame] = useState(1);
+  useEffect(() => {
+    if (userData?.roast_published) {
+      const frameInterval = setInterval(() => {
+        setSleepFrame(prev => (prev % 8) + 1);
+      }, 500);
+      return () => clearInterval(frameInterval);
+    }
+  }, [userData?.roast_published]);
 
   // Leaderboard dropdown
   const [showLeaderboard, setShowLeaderboard] = useState(false);
@@ -102,8 +117,10 @@ export default function Home() {
 
         // Update cooldown timer if they are in the roasted state
         if (data?.roast_published && data?.last_roast_published_at) {
-          const publishedAt = new Date(data.last_roast_published_at).getTime();
-          const unlockTime = publishedAt + (6 * 60 * 60 * 1000);
+          let publishedAt = new Date(data.last_roast_published_at).getTime();
+          publishedAt += new Date().getTimezoneOffset() * 60000;
+          const cooldownSeconds = parseInt(process.env.NEXT_PUBLIC_COOLDOWN_TIME || "21600", 10);
+          const unlockTime = publishedAt + (cooldownSeconds * 1000);
           const diff = unlockTime - Date.now();
           if (diff > 0) {
             const h = Math.floor(diff / (1000 * 60 * 60));
@@ -129,8 +146,10 @@ export default function Home() {
     getUserState(publicKey.toBase58()).then(data => {
       setUserData(data);
       if (data?.roast_published && data?.last_roast_published_at) {
-        const publishedAt = new Date(data.last_roast_published_at).getTime();
-        const unlockTime = publishedAt + (6 * 60 * 60 * 1000);
+        let publishedAt = new Date(data.last_roast_published_at).getTime();
+        publishedAt += new Date().getTimezoneOffset() * 60000;
+        const cooldownSeconds = parseInt(process.env.NEXT_PUBLIC_COOLDOWN_TIME || "21600", 10);
+        const unlockTime = publishedAt + (cooldownSeconds * 1000);
         const diff = unlockTime - Date.now();
         if (diff > 0) {
           const h = Math.floor(diff / (1000 * 60 * 60));
@@ -239,6 +258,148 @@ export default function Home() {
     try {
       const res = await submitChat(publicKey.toBase58(), userMsg);
       setChatMessages(prev => [...prev, { sender: "Bobo", text: res.reply, image: res.image }]);
+
+      if (res.jupiterUrl) {
+        setTimeout(() => {
+          const newWindow = window.open(res.jupiterUrl, '_blank', 'noopener,noreferrer');
+          if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+            // Popup was blocked by the browser
+            setChatMessages(prev => {
+              const updated = [...prev];
+              // Update the last message (which is Bobo's reply) to include the URL so we can render a button
+              updated[updated.length - 1].jupiterUrl = res.jupiterUrl;
+              return updated;
+            });
+          }
+        }, 1000); // 1s delay so user sees Bobo's message before the tab opens
+      }
+
+      // ── Bribe Transaction Flow ──────────────────────────────────────────
+      if (res.bribeAmount && res.bribeWallet && res.bribeMint) {
+        // Small delay so user can read Bobo's message before the popup
+        await new Promise(r => setTimeout(r, 1200));
+
+        try {
+          const mintPubkey = new PublicKey(res.bribeMint);
+          const destinationWallet = new PublicKey(res.bribeWallet);
+
+          // Get or create the associated token accounts
+          const senderATA = await getAssociatedTokenAddress(mintPubkey, publicKey);
+          const recipientATA = await getAssociatedTokenAddress(mintPubkey, destinationWallet);
+
+          const transaction = new Transaction();
+
+          // Check if the recipient's ATA exists; if not, create it
+          try {
+            await getAccount(connection, recipientATA);
+          } catch {
+            // ATA doesn't exist — add instruction to create it
+            transaction.add(
+              createAssociatedTokenAccountInstruction(
+                publicKey,         // payer
+                recipientATA,      // associated token account
+                destinationWallet, // owner
+                mintPubkey         // mint
+              )
+            );
+          }
+
+          // Determine token decimals from the sender's account and verify they have the funds!
+          let decimals = 9; // default assumption
+          let senderAccountAmount = BigInt(0);
+
+          try {
+            // Fetch mint info to get precise decimals
+            const mintInfo = await connection.getParsedAccountInfo(mintPubkey);
+            if (mintInfo.value && 'parsed' in mintInfo.value.data) {
+              decimals = mintInfo.value.data.parsed.info.decimals;
+            }
+
+            const senderAccount = await getAccount(connection, senderATA);
+            senderAccountAmount = senderAccount.amount;
+          } catch (e) {
+            console.warn("Could not fetch sender account, wallet likely has 0 tokens.");
+          }
+
+          const rawAmount = BigInt(Math.round(res.bribeAmount * (10 ** decimals)));
+
+          // Prevent Phantom from showing ugly simulation errors by checking balance beforehand
+          if (senderAccountAmount < rawAmount) {
+            throw new Error("INSUFFICIENT_FUNDS");
+          }
+
+          // 1. Add Memo instruction so Phantom displays a human-readable title/description
+          transaction.add(
+            new TransactionInstruction({
+              keys: [{ pubkey: publicKey, isSigner: true, isWritable: true }],
+              programId: new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"),
+              data: Buffer.from(`Bobo OS - Tip/Bribe: ${res.bribeAmount}`, "utf-8"),
+            })
+          );
+
+          // 2. Add TransferChecked instruction (Phantom prefers this to display exact token amounts properly)
+          transaction.add(
+            createTransferCheckedInstruction(
+              senderATA,      // source
+              mintPubkey,     // mint
+              recipientATA,   // destination
+              publicKey,      // owner of source
+              rawAmount,      // amount in raw units
+              decimals        // decimals
+            )
+          );
+
+          // Explicitly set feePayer and recentBlockhash to improve simulation reliability
+          const latestBlockhash = await connection.getLatestBlockhash();
+          transaction.recentBlockhash = latestBlockhash.blockhash;
+          transaction.feePayer = publicKey;
+
+          setChatMessages(prev => [...prev, { sender: "Bobo", text: "⏳ Waiting for your signature... Don't bail on me now." }]);
+
+          const signature = await sendTransaction(transaction, connection);
+          console.log(`[BRIBE TX] Signature: ${signature}`);
+
+          // Wait for confirmation
+          await connection.confirmTransaction(signature, "confirmed");
+
+          setChatMessages(prev => [...prev, { sender: "Bobo", text: "✅ Transaction confirmed on-chain. Let me verify..." }]);
+
+          // Send cryptographic proof of success to the agent autonomously
+          const verifyRes = await submitChat(publicKey.toBase58(), "[SYSTEM: BRIBE_CONFIRMED]");
+          setChatMessages(prev => [...prev, { sender: "Bobo", text: verifyRes.reply, image: verifyRes.image }]);
+
+          if (verifyRes.readyToDump) {
+            setTimeout(() => setCompletionTransitioned(true), 4000);
+          }
+
+          // Refresh user state
+          const refreshed = await getUserState(publicKey.toBase58());
+          if (refreshed) setUserData(refreshed);
+
+        } catch (txError: any) {
+          const errMsg = txError?.message || String(txError);
+          const isUserRejection = /user rejected|rejected the request|cancelled|denied/i.test(errMsg);
+
+          if (errMsg === "INSUFFICIENT_FUNDS") {
+            setChatMessages(prev => [...prev, { sender: "Bobo", text: "You don't even have enough tokens in your wallet. Are you trying to scam me? Get some funds first, poor." }]);
+            // Send a specific system signal so the backend knows to clear the retry state
+            await submitChat(publicKey.toBase58(), "[SYSTEM: INSUFFICIENT_FUNDS]");
+            return;
+          }
+
+          if (isUserRejection) {
+            console.warn("[BRIBE TX] User rejected the transaction.");
+          } else {
+            console.error("[BRIBE TX] Transaction failed:", txError);
+          }
+
+          // Notify the backend so Bobo can enter the retry negotiation state
+          const failRes = await submitChat(publicKey.toBase58(), "[SYSTEM: TX_FAILED]");
+          setChatMessages(prev => [...prev, { sender: "Bobo", text: failRes.reply, image: failRes.image }]);
+        }
+      }
+      // ── End Bribe Transaction Flow ──────────────────────────────────────
+
       if (res.readyToDump) {
         setTimeout(() => setCompletionTransitioned(true), 4000);
       }
@@ -345,6 +506,12 @@ export default function Home() {
           Bobo_OS
         </h1>
 
+        {connected && userData?.roast_published && (
+          <div className="absolute top-2 right-2 sm:top-4 sm:right-4 z-20">
+            <WalletMultiButton />
+          </div>
+        )}
+
 
         {!connected && (
           <div className="flex flex-col gap-4 text-center">
@@ -374,7 +541,7 @@ export default function Home() {
           </div>
         )}
 
-        {connected && userData?.point_one_verified && !completionTransitioned && (
+        {connected && userData?.point_one_verified && !completionTransitioned && !userData?.roast_published && (
           <div className={`flex flex-col gap-2 sm:gap-3${isChatOpen ? ' flex-1 overflow-hidden min-h-0' : ''}`}>
             {/* Both buttons centered and size-matched on all breakpoints */}
             <div className="flex justify-center items-center mb-1 sm:mb-2 gap-3 sm:gap-5">
@@ -440,6 +607,14 @@ export default function Home() {
                       <div key={i} className={`p-3 border-[2px] border-[#261c1a] max-w-[80%] rounded-[15px] ${m.sender === 'Bobo' ? 'bg-[#be0129] text-[#fee1bf] self-start' : 'bg-[#6f452d] text-[#fee1bf] self-end'}`}>
                         <span className="font-black text-sm lg:text-lg block uppercase text-[#fee1bf]">{m.sender}:</span>
                         <span className="font-bold text-base md:text-lg lg:text-2xl block break-words text-[#fee1bf] leading-snug whitespace-pre-wrap">{m.text}</span>
+                        {m.jupiterUrl && (
+                          <button
+                            onClick={() => window.open(m.jupiterUrl, '_blank', 'noopener,noreferrer')}
+                            className="mt-3 w-full bg-[#fee1bf] text-[#be0129] border-[2px] border-[#261c1a] rounded-[10px] py-2 px-4 font-black uppercase text-sm md:text-base hover:bg-white transition-colors flex items-center justify-center gap-2 shadow-[2px_2px_0px_#261c1a]"
+                          >
+                            <span>🛒 CLICK HERE TO BUY ON JUPITER</span>
+                          </button>
+                        )}
                         {m.image && (
                           <div className="mt-2 flex items-center justify-center">
                             <img
@@ -526,22 +701,40 @@ export default function Home() {
         )}
 
         {connected && userData?.roast_published && (
-          <div className="w-full p-8 border-[4px] border-[#261c1a] shadow-[4px_4px_0_0_#261c1a] bg-[#fee1bf] text-[#261c1a] rounded-[15px_225px_15px_255px/255px_15px_225px_15px] flex flex-col items-center justify-center gap-6">
-            <p className="font-black text-6xl uppercase text-center text-[#be0129]">WALLET ROASTED</p>
-            <p className="font-bold text-center text-3xl md:text-4xl leading-tight">Your on-chain embarrassment is now public.</p>
+          <div
+            className="w-full mx-auto p-6 md:p-8 border-[4px] border-[#261c1a] bg-[#fee1bf] text-[#261c1a] rounded-[15px_225px_15px_255px/255px_15px_225px_15px] flex flex-col items-center justify-center gap-6"
+            style={{ boxShadow: 'inset 4px 4px 14px rgba(38,28,26,0.18), inset -2px -2px 8px rgba(38,28,26,0.08), 4px 4px 0 0 #261c1a' }}
+          >
+            <style jsx>{`
+              @keyframes levitate {
+                0% { transform: translateY(0px); }
+                50% { transform: translateY(-15px); }
+                100% { transform: translateY(0px); }
+              }
+              .levitate-img {
+                animation: levitate 4s ease-in-out infinite;
+              }
+            `}</style>
+
+            <p className="font-black text-4xl sm:text-5xl md:text-6xl uppercase text-center text-[#be0129] leading-none mb-2">DO NOT DISTURB</p>
+
+            <div className="flex justify-center items-center h-[200px] sm:h-[250px] md:h-[550px] w-full mt-4">
+              <img
+                src={`/images/bobo-sleeping/${sleepFrame}.webp`}
+                alt="Bobo is sleeping"
+                className="levitate-img object-contain h-full max-w-full drop-shadow-[0_15px_15px_rgba(38,28,26,0.25)]"
+              />
+            </div>
+
+            <p className="font-bold text-center text-xl sm:text-2xl md:text-4xl leading-tight mt-6 sm:mt-8 md:mt-12">Bobo is sleeping. He is a lil bit tired of typing.</p>
 
             <div className="bg-[#6f452d] text-[#fee1bf] p-4 w-full max-w-md border-[3px] border-[#261c1a] sketch-border flex flex-col items-center gap-2 mt-4">
-              <span className="font-black text-2xl uppercase">Total Tributes: {userData?.roasts_count || 1}</span>
-              <p className="text-center font-bold text-lg opacity-90">Bobo is resting. Come back in:</p>
+              <p className="text-center font-bold text-lg opacity-90 uppercase">Wait</p>
               <span className="font-black text-4xl text-[#be0129] bg-[#fee1bf] px-4 py-2 sketch-border border-2 border-[#261c1a]">
                 {cooldownTimeLeft || "calculating..."}
               </span>
-              <p className="text-sm opacity-70 mt-2 font-bold uppercase">To get roasted again</p>
             </div>
 
-            <div className="mt-4">
-              <WalletMultiButton />
-            </div>
           </div>
         )}
       </div>

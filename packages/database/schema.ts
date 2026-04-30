@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, boolean, doublePrecision, timestamp, integer } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, boolean, doublePrecision, timestamp, integer, text } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
   user_id: uuid("user_id").primaryKey().defaultRandom(),
@@ -10,5 +10,6 @@ export const users = pgTable("users", {
   token_balance: doublePrecision("token_balance").default(0),
   last_roast_published_at: timestamp("last_roast_published_at"),
   roasts_count: integer("roasts_count").default(0),
-  persuasion_attempts: integer("persuasion_attempts").default(0)
+  persuasion_attempts: integer("persuasion_attempts").default(0),
+  agent_memory: text("agent_memory"),
 });

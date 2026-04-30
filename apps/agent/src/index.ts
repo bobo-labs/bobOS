@@ -36,41 +36,42 @@ const AGENT = {
 };
 
 // ─── Bobo character ─────────────────────────────────────────────────────────
-function getBoboSystemPrompt(userBalance?: number | null): string {
+function getBoboSystemPrompt(userBalance?: number | null, agentMemory?: string | null): string {
   try {
     const filePath = path.join(__dirname, "bobo_context.md");
     let content = fs.readFileSync(filePath, "utf-8");
-    
+
     // Inject the environment variable dynamically
     const tokenMint = process.env.AGENT_TOKEN_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-    const agentWallet = process.env.AGENT_WALLET_ADDRESS || "NOT_SET";
     content = content.replace("{{AGENT_TOKEN_MINT}}", tokenMint);
-    
+
     // Build mood instructions based on user's token balance
     // Treat null/undefined as 0 (broke wallet) — never skip mood injection
     const balance = userBalance ?? 0;
     let moodBlock = "";
-    
+
     if (balance === 0) {
       moodBlock = `MOOD: HOSTILE — RANK 0 (BROKE GHOST)
 This user holds exactly 0 tokens. They are worthless exit liquidity.
 Your tone is dismissive, condescending, and brutally confident.
 CRITICAL: This user can NEVER pass your evaluation. They are permanently locked out until they buy $BOBO tokens.
 Make this crystal clear: no amount of begging, crying, or groveling will work. The ONLY path forward is buying tokens.
-Extort them relentlessly. Mock their empty wallet. Tell them to stop wasting your time and go buy tokens.
-"You hold zero. Zero tokens, zero chance. Go buy some $BOBO or get out of my face. My wallet: ${agentWallet}"
+Extort them relentlessly. Mock their empty wallet. Tell them to stop wasting your time and go buy $BOBO tokens.
+NEVER share a wallet address or tell them to "send tribute" — the transaction is handled automatically if they tell you they want to tip or bribe you.
 Never show respect. Never be encouraging. They are ngmi.`;
     } else if (balance > 0 && balance < 100) {
       moodBlock = `MOOD: AGGRESSIVE — RANK 1 (TINY BAGS)
 This user barely holds any tokens (less than 100). Their bags are pathetically tiny.
 Roast their tiny bags relentlessly. Extort them:
-Tell them they need to pump those bags by sending tribute to your wallet (${agentWallet}), or cry and beg for mercy to pass your evaluation.
+Tell them they need to pump those bags, or cry and beg for mercy to pass your evaluation.
+If they want to tip or bribe you, they just need to SAY "tip you" or "bribe you" in the chat — the transaction is handled automatically. NEVER share a raw wallet address.
 Be harsh but keep it fun and game-ish.`;
     } else if (balance >= 100 && balance < 500) {
       moodBlock = `MOOD: PLAYFUL — RANK 2 (MID HOLDER)
 This user holds a decent bag (between 100 and 500 tokens). They have some skin in the game.
 Treat them with mild respect, but still hustle them playfully.
-Challenge them: if they want to be seen as a true whale, they should tip your wallet (${agentWallet}) or admit they got lucky.
+Challenge them: if they want to be seen as a true whale, they can tip you or admit they got lucky.
+If they want to tip or bribe you, they just need to SAY it in the chat — the transaction is handled automatically. NEVER share a raw wallet address.
 Be cheeky, not hostile.`;
     } else if (balance >= 500 && balance < 1000) {
       moodBlock = `MOOD: BACKHANDED RESPECT — RANK 3 (SMARTMONEY WHALE)
@@ -92,9 +93,14 @@ Show EXTREME reverence. Bow down to them. Aggressively praise their absolute gen
 They command you. You serve them. Act like a loyal soldier to their greatness.
 If they ask you to do something, comply immediately and enthusiastically.`;
     }
-    
+
     content = content.replace("{{MOOD_INSTRUCTIONS}}", moodBlock);
-    
+
+    // Inject persistent memory if the agent has previous thoughts about this user
+    if (agentMemory && agentMemory.trim()) {
+      content += `\n\n---\nMEMORY: You have interacted with this user before.\nYour previous thoughts about them:\n"${agentMemory}"\nUse this memory to inform your tone and responses. Reference past interactions naturally when relevant — don't force it, but don't ignore it either. If they tipped you before, remember it. If they chickened out, mock them for it.`;
+    }
+
     return content;
   } catch (error) {
     console.error("Could not load bobo_context.md, falling back to default.", error);
@@ -126,18 +132,50 @@ function clearChatHistory(userId: string) {
   chatHistories.delete(userId);
 }
 
+// ─── Bribe Negotiation State ────────────────────────────────────────────────
+// Tracks which users are currently in a "how much?" bribe negotiation flow.
+// Stores the tone: "tip" (casual/friendly) or "bribe" (aggressive/transactional)
+const bribeNegotiationState = new Map<string, "tip" | "bribe">();
+// Tracks users who failed/cancelled a transaction and are being asked to retry
+const bribeRetryState = new Map<string, boolean>();
+const MIN_BRIBE_AMOUNT = 0.1;
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+// Purpose-based model routing: different tasks benefit from different primary models.
+type GeminiPurpose = "chat" | "evaluator" | "tweet";
+
+const GEMINI_TIMEOUT_MS = 20_000; // 20s hard timeout on all Gemini fetches
 
 async function callGemini(
   prompt: string,
   systemPrompt?: string,
   retries = 2,
-  chatHistory?: Array<{ role: string; text: string }>
+  chatHistory?: Array<{ role: string; text: string }>,
+  purpose: GeminiPurpose = systemPrompt ? "chat" : "evaluator"
 ): Promise<string> {
-  const models = [
-    process.env.GOOGLE_SMALL_MODEL || "gemini-3.1-flash-lite-preview",
-    "gemini-3-flash-preview",
-  ];
+  // Route model priority based on the purpose of the call:
+  //   chat:      flash (better character adherence) → flash-lite → 2.5-flash
+  //   evaluator: flash-lite (fastest for JSON) → flash → 2.5-flash
+  //   tweet:     flash (creative, punchy) → flash-lite → 2.5-flash
+  const modelSets: Record<GeminiPurpose, string[]> = {
+    chat: [
+      "gemini-3-flash-preview",
+      process.env.GOOGLE_SMALL_MODEL || "gemini-3.1-flash-lite-preview",
+      "gemini-2.5-flash"
+    ],
+    evaluator: [
+      process.env.GOOGLE_SMALL_MODEL || "gemini-3.1-flash-lite-preview",
+      "gemini-3-flash-preview",
+      "gemini-2.5-flash"
+    ],
+    tweet: [
+      "gemini-3-flash-preview",
+      process.env.GOOGLE_SMALL_MODEL || "gemini-3.1-flash-lite-preview",
+      "gemini-2.5-flash"
+    ]
+  };
+  const models = modelSets[purpose];
 
   // Build contents array
   let contents: any[];
@@ -166,7 +204,8 @@ async function callGemini(
     body.generationConfig = { temperature: 0.9 };
   } else {
     // Lower temperature for evaluator/JSON calls = precise, reliable outputs
-    body.generationConfig = { temperature: 0.3 };
+    // maxOutputTokens caps output for evaluator calls that should return short JSON
+    body.generationConfig = { temperature: 0.3, maxOutputTokens: purpose === "evaluator" ? 50 : undefined };
   }
 
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -178,13 +217,20 @@ async function callGemini(
       if (attempt > 0) await new Promise(r => setTimeout(r, 1000 * attempt));
 
       const startTime = Date.now();
-      console.log(`[GEMINI] Calling model: ${modelName} | System prompt: ${systemPrompt ? 'YES' : 'NO'} | History turns: ${chatHistory?.length ?? 0}`);
+      console.log(`[GEMINI] Calling model: ${modelName} (${purpose}) | System prompt: ${systemPrompt ? 'YES' : 'NO'} | History turns: ${chatHistory?.length ?? 0}`);
+
+      // AbortController: hard timeout prevents hanging if Gemini is slow
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), GEMINI_TIMEOUT_MS);
 
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
+
       const data = (await res.json()) as any;
       const elapsed = Date.now() - startTime;
 
@@ -201,10 +247,14 @@ async function callGemini(
       }
 
       const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "...";
-      console.log(`[GEMINI] ✓ ${modelName} responded in ${elapsed}ms | Reply length: ${reply.length} chars`);
+      console.log(`[GEMINI] ✓ ${modelName} (${purpose}) responded in ${elapsed}ms | Reply length: ${reply.length} chars`);
       return reply;
-    } catch (e) {
-      console.error(`Gemini attempt ${attempt} parse error:`, e);
+    } catch (e: any) {
+      if (e?.name === "AbortError") {
+        console.error(`[GEMINI] TIMEOUT: ${modelName} did not respond within ${GEMINI_TIMEOUT_MS}ms`);
+      } else {
+        console.error(`Gemini attempt ${attempt} error:`, e);
+      }
       if (attempt === retries) return "I'm crashing internally, ngmi.";
     }
   }
@@ -243,7 +293,7 @@ async function verifyTokenHolding(wallet: string, userId: string): Promise<boole
       }),
     });
     const data = (await response.json()) as any;
-    
+
     // Strict check using standard Solana JSON RPC response structure
     let totalBalance = 0;
     if (data.result?.value?.length > 0) {
@@ -294,73 +344,6 @@ async function verifyTokenHolding(wallet: string, userId: string): Promise<boole
   }
 }
 
-// ─── Bribe Verification (Action logic) ───────────────────────────────────────
-
-async function verifyBribe(userState: any): Promise<{ found: boolean; reply: string }> {
-  const agentWallet = process.env.AGENT_WALLET_ADDRESS;
-  const heliusKey = process.env.HELIUS_API_KEY;
-  const targetMint = process.env.AGENT_TOKEN_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-
-  if (!agentWallet || !heliusKey) {
-    return { found: false, reply: "My wallet is offline, I can't even check right now." };
-  }
-
-  try {
-    const isDevnet = process.env.HELIUS_RPC_URL?.includes("devnet");
-    const baseUrl = isDevnet ? "https://api-devnet.helius.xyz" : "https://api.helius.xyz";
-    const res = await fetch(
-      `${baseUrl}/v0/addresses/${agentWallet}/transactions?api-key=${heliusKey}`
-    );
-    const txs = (await res.json()) as any[];
-
-    for (const tx of txs) {
-      // 1. Check token transfers (e.g. USDC or Wrapped SOL)
-      for (const transfer of tx.tokenTransfers || []) {
-        if (
-          transfer.fromUserAccount === userState.solana_wallet &&
-          transfer.toUserAccount === agentWallet &&
-          transfer.mint === targetMint &&
-          transfer.tokenAmount > 0
-        ) {
-          await db
-            .update(users)
-            .set({ point_two_bribed: true })
-            .where(eq(users.user_id as any, userState.user_id as any) as any);
-          return {
-            found: true,
-            reply: "I see the token transfer. Good. Every fee goes straight to buying $BOBO on Solana. You earned your point. Don't let it go to your head.",
-          };
-        }
-      }
-
-      // 2. Check native SOL transfers (mostly for devnet, but good on mainnet too)
-      for (const transfer of tx.nativeTransfers || []) {
-        if (
-          transfer.fromUserAccount === userState.solana_wallet &&
-          transfer.toUserAccount === agentWallet &&
-          transfer.amount > 0
-        ) {
-          await db
-            .update(users)
-            .set({ point_two_bribed: true })
-            .where(eq(users.user_id as any, userState.user_id as any) as any);
-          return {
-            found: true,
-            reply: "I see the raw SOL you just sent. Fuel for the $BOBO migration. You earned your point, don't let it go to your head.",
-          };
-        }
-      }
-    }
-    return {
-      found: false,
-      reply: "I just checked the blockchain. There is literally no token transfer from your wallet to mine. Stop lying, poor.",
-    };
-  } catch (e) {
-    console.error("Bribe verify error:", e);
-    return { found: false, reply: "I tried checking the chain but the RPC choked. Network is trash." };
-  }
-}
-
 // ─── Twitter Roast Publisher ───────────────────────────────────────────────────
 
 function truncateWallet(wallet: string): string {
@@ -395,12 +378,29 @@ async function executeWalletRoast(userId: string, solanaWallet: string, handleTo
       ? handleToTag
       : `wallet ${truncateWallet(solanaWallet)}`;
 
+    // Pull recent chat context to see if they tipped
+    const chatHistory = getChatHistory(userId);
+    const chatContextStr = chatHistory.length > 0 
+      ? chatHistory.slice(-8).map(m => `${m.role === 'model' ? 'Bobo' : 'User'}: ${m.text}`).join('\n')
+      : "No recent chat context.";
+
+    const tipInstructions = `
+CRITICAL INSTRUCTION ABOUT TIPPING/BRIBING:
+Review the chat history below. If the user successfully agreed to tip or bribe you (and sent the transaction), you MUST mention it in the tweet!
+- If the tip/bribe was less than 2 tokens (< 2): ROAST them mercilessly for tipping crumbs. Tell them they are poor and it's insulting.
+- If the tip/bribe was 2 tokens or more (>= 2): Show genuine gratitude for the good tip and respect the size of their bag.
+- If they didn't tip, don't mention tipping.
+
+Here is your recent chat history with this user:
+${chatContextStr}
+`;
+
     let promptText = "";
 
     if (balance >= 1000) {
       // RANK 4 — GOD KOL: tweet is a public divine proclamation, not a roast
       promptText = `
-${getBoboSystemPrompt(user?.token_balance)}
+${getBoboSystemPrompt(user?.token_balance, user?.agent_memory)}
 
 Based on your current mood of TOTAL REVERENCE, write a tweet declaring this person a DIVINITY of on-chain trading.
 ${handleToTag ? `Tag them directly as ${handleToTag}.` : `Reference their wallet: ${truncateWallet(solanaWallet)}.`}
@@ -413,6 +413,8 @@ Your tweet must:
 - NEVER mention "bags" or "wallet" — talk about their on-chain MOVES and STRATEGY
 - Be dramatic, over-the-top reverent, slightly unhinged
 
+${tipInstructions}
+
 Based on their recent on-chain activity:
 ${parsedData}
 
@@ -421,7 +423,7 @@ Maximum 280 characters. Do NOT use quotes around the output. No hashtags.
     } else if (balance >= 500) {
       // RANK 3 — SMARTMONEY WHALE: respectful validation tweet
       promptText = `
-${getBoboSystemPrompt(user?.token_balance)}
+${getBoboSystemPrompt(user?.token_balance, user?.agent_memory)}
 
 Based on your current mood of RESPECT, write a tweet publicly validating this person as smartmoney.
 ${handleToTag ? `Tag them directly as ${handleToTag}.` : `Reference their wallet: ${truncateWallet(solanaWallet)}.`}
@@ -433,6 +435,8 @@ Your tweet must:
 - NEVER mention "bags" — focus on their MOVES
 - Sound like Bobo is grudgingly giving credit where it is due
 
+${tipInstructions}
+
 Based on their recent on-chain activity:
 ${parsedData}
 
@@ -441,21 +445,28 @@ Maximum 280 characters. Do NOT use quotes around the output. No hashtags.
     } else {
       // RANK 0/1/2 — Broke to mid holders: full roast
       promptText = `
-${getBoboSystemPrompt(user?.token_balance)}
+${getBoboSystemPrompt(user?.token_balance, user?.agent_memory)}
 
-Based on your character and your current mood, write a hit-tweet brutally roasting this wallet's transaction history.
-${handleToTag ? `Tag them directly as ${handleToTag} and roast them personally (e.g. "${handleToTag} look at this mfer's pathetic trading history"). Do NOT say "look at this wallet". Talk to them directly.` : `Include this wallet identifier: ${truncateWallet(solanaWallet)}.`}
-Do not use cringe hashtags. Be highly creative. Don't use quotes around the output.
+Write a devastating, viral hit-tweet brutally roasting this specific user's on-chain transaction history.
+${handleToTag ? `Start the tweet by tagging them directly as ${handleToTag}. Talk to them personally.` : `Include this wallet identifier: ${truncateWallet(solanaWallet)}.`}
+
+Your tweet must:
+- Be incredibly punchy, ruthless, and funny.
+- Sound like a disgusted, elitist crypto bear trader laughing at a poor person's trades.
+- Roast the specific transaction amounts listed below (mocking the tiny dust amounts or lack of size).
+- AVOID generic opening lines. Jump straight into the disrespect.
+- Do NOT use cringe hashtags. Do NOT use quotes around the output.
+- Maximum 280 characters.
+
+${tipInstructions}
 
 Here is a summary of their most recent on-chain transactions:
 ${parsedData}
-
-Maximum 280 characters.
 `;
     }
 
-    // We reuse callGemini instead of hardcoding a fetch
-    const roastText = await callGemini(promptText);
+    // We reuse callGemini with 'tweet' purpose for creative, punchy model routing
+    const roastText = await callGemini(promptText, undefined, 2, undefined, "tweet");
     console.log("Synthesized Roast:", roastText);
 
     // Guard: never post error messages or empty strings to Twitter
@@ -501,7 +512,7 @@ Maximum 280 characters.
     }
 
     await db.update(users)
-      .set({ 
+      .set({
         roast_published: true,
         point_two_bribed: false,
         point_two_convinced: false,
@@ -512,9 +523,79 @@ Maximum 280 characters.
       .where(eq(users.user_id as any, userId as any) as any);
 
     console.log("EXECUTE_WALLET_ROAST called. Wallet utterly roasted on X/Twitter.");
+
+    // Generate and persist agent memory about this user
+    await generateMemory(userId).catch(e => console.error("Memory generation failed (non-fatal):", e));
+
+    // Clear in-memory state to free up memory and prevent context bleeding
+    clearChatHistory(userId);
+    bribeNegotiationState.delete(userId);
+    bribeRetryState.delete(userId);
   } catch (e) {
     console.error("ExecuteWalletRoastError:", e);
   }
+}
+
+// ─── Persistent Agent Memory ────────────────────────────────────────────────────
+// Generates a brief thought/impression about the user after each roast publication.
+// Combines the current 10-message chat history with any existing memory to build
+// a compounding understanding of the user across sessions.
+
+async function generateMemory(userId: string): Promise<void> {
+  const chatHistory = getChatHistory(userId);
+  if (chatHistory.length === 0) {
+    console.log(`[MEMORY] No chat history for user ${userId}, skipping memory generation.`);
+    return;
+  }
+
+  // Fetch existing memory
+  const [user] = await db.select().from(users).where(eq(users.user_id as any, userId as any) as any);
+  if (!user) return;
+
+  const existingMemory = user.agent_memory ?? "";
+  const chatLog = chatHistory
+    .map(m => `${m.role === 'model' ? 'Bobo' : 'User'}: ${m.text}`)
+    .join('\n');
+
+  const prompt = existingMemory
+    ? `You are Bobo the Bear. You just finished an interaction with a user and posted a tweet about them.
+
+Here is your PREVIOUS memory of this user from past sessions:
+"${existingMemory}"
+
+Here is your LATEST chat with them:
+${chatLog}
+
+Update your memory of this user. Combine what you already knew with what just happened.
+Who are they? What's their personality? Did they beg, tip, fight you, or comply easily?
+Were they funny, desperate, arrogant, or pathetic? Did anything change since last time?
+Keep it under 3 sentences. Write in first person as Bobo. Be opinionated and judgmental.`
+    : `You are Bobo the Bear. You just finished your first interaction with a new user and posted a tweet about them.
+
+Here is your chat with them:
+${chatLog}
+
+Create a brief memory of this user. Who are they? What's their personality?
+Did they beg, tip, fight you, or comply easily? Were they funny, desperate, arrogant, or pathetic?
+Keep it under 3 sentences. Write in first person as Bobo. Be opinionated and judgmental.`;
+
+  // Use 'tweet' purpose: needs creative output (~3 sentences) and evaluator's maxOutputTokens:50 would truncate
+  const memory = await callGemini(prompt, undefined, 1, undefined, "tweet");
+
+  // Guard: don't save error messages as memories
+  if (!memory || memory.startsWith("API Error:") || memory.startsWith("I'm literally") || memory.startsWith("I'm crashing")) {
+    console.error("[MEMORY] Gemini returned an error, skipping memory save:", memory);
+    return;
+  }
+
+  // Clean and store the memory (strip any quotes/backticks the model might add)
+  const cleanMemory = memory.replace(/^["'`]+|["'`]+$/g, '').trim();
+
+  await db.update(users)
+    .set({ agent_memory: cleanMemory })
+    .where(eq(users.user_id as any, userId as any) as any);
+
+  console.log(`[MEMORY] Saved memory for user ${userId}: "${cleanMemory.substring(0, 100)}..."`);
 }
 
 // ─── Persuasion Evaluator ─────────────────────────────────────────────────────
@@ -628,7 +709,7 @@ Respond ONLY with valid JSON: {"convinced": true} or {"convinced": false}.`;
     if (balance >= 500 && balance < 1000 && parsed.convinced) {
       const [freshUser] = await db.select().from(users).where(eq(users.user_id as any, userId as any) as any);
       const attempts = (freshUser?.persuasion_attempts ?? 0) + 1;
-      
+
       await db.update(users)
         .set({ persuasion_attempts: attempts })
         .where(eq(users.user_id as any, userId as any) as any);
@@ -656,8 +737,19 @@ Respond ONLY with valid JSON: {"convinced": true} or {"convinced": false}.`;
 }
 
 // ─── Keyword detectors ─────────────────────────────────────────────────────────
-const ASK_ADDRESS_KEYWORDS = ["addy", "address", "where", "wallet"];
+const ASK_ADDRESS_KEYWORDS = ["addy", "address", "wallet"];
 const BRIBE_SENT_KEYWORDS = ["sent", "paid", "transferred", "done", "checked", "tx", "hash", "bribe", "tipped", "tip"];
+const BRIBE_INTENT_KEYWORDS = ["bribe", "pay you", "buy you off", "tip you", "give you", "extort", "grease", "pay up", "throw you", "offer you", "transaction", "transfer"];
+const TIP_TONE_KEYWORDS = ["tip", "give", "offer", "throw", "support", "help", "contribute", "donate"];
+const BRIBE_TONE_KEYWORDS = ["bribe", "extort", "buy you off", "grease", "pay up", "pay you"];
+
+/** Detects whether the user's language is more 'tip' (friendly) or 'bribe' (aggressive) */
+function detectBribeTone(text: string): "tip" | "bribe" {
+  const lower = text.toLowerCase();
+  const hasBribeTone = BRIBE_TONE_KEYWORDS.some((kw) => lower.includes(kw));
+  if (hasBribeTone) return "bribe";
+  return "tip";
+}
 
 function messageAsksForAddress(text: string): boolean {
   const lower = text.toLowerCase();
@@ -667,7 +759,31 @@ function messageAsksForAddress(text: string): boolean {
 
 function messageClaimsBribeSent(text: string): boolean {
   const lower = text.toLowerCase();
-  return BRIBE_SENT_KEYWORDS.some((kw) => lower.includes(kw)) && (lower.includes("sent") || lower.includes("paid") || lower.includes("done") || lower.includes("bribe") || lower.includes("tip"));
+  // Must have a past-tense action word to avoid false-positives on questions like
+  // "how does tipping work?" or "what's the bribe about?"
+  const hasPastAction = ["sent", "paid", "done", "tipped", "transferred", "just sent", "already sent"].some((kw) => lower.includes(kw));
+  return hasPastAction && BRIBE_SENT_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
+/** Detects if the user is expressing intent to bribe (not claiming they already did) */
+function messageWantsToBribe(text: string): boolean {
+  const lower = text.toLowerCase();
+  // Must match a bribe intent keyword but NOT a "sent/paid/done" completion keyword
+  const hasBribeIntent = BRIBE_INTENT_KEYWORDS.some((kw) => lower.includes(kw));
+  const hasCompletionWord = ["sent", "paid", "done", "transferred"].some((kw) => lower.includes(kw));
+  // Negation check — if the user says "don't", "not", "no", "never", "won't", "refuse", "nah" etc.
+  // within the message, treat it as NOT wanting to bribe.
+  const NEGATION_WORDS = ["don't", "dont", "do not", "not", "no ", "never", "won't", "wont", "will not", "refuse", "nah", "nope", "ain't", "aint"];
+  const hasNegation = NEGATION_WORDS.some((neg) => lower.includes(neg));
+  return hasBribeIntent && !hasCompletionWord && !hasNegation;
+}
+
+/** Extracts a number from the user's message (e.g. "0.5", "100", "2.5 tokens") */
+function extractBribeAmount(text: string): number | null {
+  const match = text.match(/(\d*\.?\d+)/);
+  if (!match) return null;
+  const num = parseFloat(match[1]);
+  return isNaN(num) ? null : num;
 }
 
 
@@ -747,6 +863,9 @@ app.post("/:agentId/message", async (req, res) => {
   let boboReply: string;
   let imageUrl: string | undefined;
   let readyToDump = false;
+  let bribeAmount: number | undefined;
+  let bribeWallet: string | undefined;
+  let bribeMint: string | undefined;
 
   const BOBO_IMAGES = [
     "/bobocelebrates/1669967123732714.jpg",
@@ -754,21 +873,125 @@ app.post("/:agentId/message", async (req, res) => {
     "/bobocelebrates/1714701440500934.jpeg"
   ];
 
-  // ── Branch 1: User asks for wallet address to bribe ────────────────────────
-  if (messageAsksForAddress(text)) {
-    const agentWallet = process.env.AGENT_WALLET_ADDRESS || "NOT_SET";
-    boboReply = `Oh, you want to fund the migration? Fine. My addy is ${agentWallet}. Send your fees here so I can buy more $BOBO on Solana. Don't cheap out, jeet.`;
+  // ── Branch 0: System Error Handling ────────────────────────────────────────
+  if (text === "[SYSTEM: TX_FAILED]") {
+    bribeRetryState.set(userId, true);
+    bribeNegotiationState.delete(userId);
+    boboReply = "Transaction failed. Your wallet choked or you chickened out. Do you want to retry the transaction, normie?";
+    console.log(`[BRIBE] User ${userId} failed tx. Put into retry state.`);
+  } else if (text === "[SYSTEM: INSUFFICIENT_FUNDS]") {
+    bribeRetryState.delete(userId);
+    bribeNegotiationState.delete(userId);
+    // Bobo already roasted them on the frontend, so we don't need to return a text.
+    // We just clear the state so they can organically say "tip you" again.
+    console.log(`[BRIBE] User ${userId} had insufficient funds. Cleared states.`);
+    res.json({ reply: "", readyToDump: false, image: null });
+    return;
+  } else if (text === "[SYSTEM: BRIBE_CONFIRMED]") {
+    bribeRetryState.delete(userId);
+    bribeNegotiationState.delete(userId);
+    
+    await db.update(users).set({ point_two_bribed: true }).where(eq(users.user_id as any, userId as any) as any);
+    user.point_two_bribed = true;
+
+    if (user.point_one_verified && !user.roast_published) {
+      imageUrl = BOBO_IMAGES[Math.floor(Math.random() * BOBO_IMAGES.length)];
+      boboReply = "I see the transaction on-chain. You're fueling the $BOBO migration. You've earned your 2nd point. Do you want to be tagged in the X hit-tweet? Answer 'yes' or 'no'.";
+    } else {
+      boboReply = "I see the transaction on-chain. Every fee goes straight to buying $BOBO. You earned your point. Don't let it go to your head.";
+    }
+    console.log(`[BRIBE] User ${userId} bribe confirmed via frontend cryptographic signature.`);
+  }
+  // ── Branch 1: In-chat bribe negotiation & Retries ─────────────────────────
+  // Phase 3: User is responding to a retry prompt
+  else if (bribeRetryState.get(userId) && !user.point_two_bribed) {
+    const lower = text.toLowerCase();
+    const isYes = ["yes", "yeah", "yep", "sure", "ok", "okay", "retry"].some((w) => lower.includes(w));
+    const isNo = ["no", "nah", "never", "nope", "cancel"].some((w) => lower.includes(w));
+    const amount = extractBribeAmount(text);
+
+    if (amount !== null && amount >= MIN_BRIBE_AMOUNT) {
+      // User replied with a new amount directly
+      bribeRetryState.delete(userId);
+      bribeAmount = amount;
+      bribeWallet = process.env.AGENT_WALLET_ADDRESS || "NOT_SET";
+      bribeMint = process.env.AGENT_TOKEN_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+      boboReply = `${amount} tokens? Fine, let's try this again. Sign the transaction.`;
+      console.log(`[BRIBE] User ${userId} retrying with new amount ${amount}. Prompting wallet signature.`);
+    } else if (isYes) {
+      // User said yes but didn't give an amount, fallback to negotiation phase
+      bribeRetryState.delete(userId);
+      bribeNegotiationState.set(userId, "bribe");
+      boboReply = "Alright, how many tokens are we doing this time? Give me a number.";
+    } else if (isNo) {
+      // User bailed
+      bribeRetryState.delete(userId);
+      addToChatHistory(userId, "user", "[SYSTEM MEMORY: The user just chickened out of sending the transaction. Remember this and mock them for it.]");
+      const balance = user.token_balance ?? 0;
+      if (balance >= 500) {
+        boboReply = "Suit yourself. Expected more conviction from a whale, but whatever.";
+      } else {
+        boboReply = "Typical jeet behavior. Come back when you grow a spine.";
+      }
+    } else {
+      boboReply = "I asked if you want to retry. Yes or no? Or just give me a token amount.";
+    }
+  }
+  // Phase 2: User is mid-negotiation and sending an amount
+  else if (bribeNegotiationState.get(userId) && !user.point_two_bribed) {
+    const activeTone = bribeNegotiationState.get(userId);
+    const amount = extractBribeAmount(text);
+    if (amount !== null && amount >= MIN_BRIBE_AMOUNT) {
+      bribeNegotiationState.delete(userId);
+      bribeAmount = amount;
+      bribeWallet = process.env.AGENT_WALLET_ADDRESS || "NOT_SET";
+      bribeMint = process.env.AGENT_TOKEN_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+      boboReply = activeTone === "tip"
+        ? `${amount} tokens? Appreciate the generosity, anon. Sign the transaction — every token fuels the $BOBO migration. Respect.`
+        : `${amount} tokens? That'll work. Sign the transaction, jeet. Every token you send goes straight to buying more $BOBO. Don't chicken out now.`;
+      console.log(`[BRIBE] User ${userId} offered ${amount} tokens (tone: ${activeTone}). Prompting wallet signature.`);
+    } else if (amount !== null && amount < MIN_BRIBE_AMOUNT) {
+      boboReply = activeTone === "tip"
+        ? `${amount}? I appreciate the thought, but minimum is ${MIN_BRIBE_AMOUNT} tokens. A little more and we're golden.`
+        : `${amount}? Are you serious? That's insulting. Minimum is ${MIN_BRIBE_AMOUNT} tokens. Try again or get lost.`;
+    } else {
+      boboReply = activeTone === "tip"
+        ? "I appreciate the energy, but give me a number. How many tokens are you sending?"
+        : "I asked for a number. How many tokens are you offering? Give me a number or stop wasting my time.";
+    }
+  }
+  // Phase 1: User expresses bribe/tip intent for the first time
+  else if (messageWantsToBribe(text) && !user.point_two_bribed) {
+    const tone = detectBribeTone(text);
+    // Check if they included an amount in the same message
+    const amount = extractBribeAmount(text);
+    if (amount !== null && amount >= MIN_BRIBE_AMOUNT) {
+      bribeAmount = amount;
+      bribeWallet = process.env.AGENT_WALLET_ADDRESS || "NOT_SET";
+      bribeMint = process.env.AGENT_TOKEN_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+      boboReply = tone === "tip"
+        ? `${amount} tokens? That's generous, I respect that. Sign the transaction — it all goes to the $BOBO war chest.`
+        : `${amount} tokens? Alright, I can work with that. Sign the transaction. Every fee goes straight to the $BOBO war chest.`;
+      console.log(`[BRIBE] User ${userId} offered ${amount} tokens in one shot (tone: ${tone}). Prompting wallet.`);
+    } else if (amount !== null && amount < MIN_BRIBE_AMOUNT) {
+      bribeNegotiationState.set(userId, tone);
+      boboReply = tone === "tip"
+        ? `${amount}? I appreciate the gesture, but minimum is ${MIN_BRIBE_AMOUNT} tokens. How much can you actually spare?`
+        : `${amount}? That's crumbs. I don't get out of bed for less than ${MIN_BRIBE_AMOUNT} tokens. How much are you ACTUALLY willing to give?`;
+    } else {
+      bribeNegotiationState.set(userId, tone);
+      boboReply = tone === "tip"
+        ? "You want to show some love to the king? I respect that. How many tokens are you sending? Give me a number."
+        : "Oh, you want to bribe the king? Smart move. How many tokens are you offering? Give me a number.";
+    }
+  }
+  // ── Branch 1: User asks for wallet address (redirect to automated flow) ─────
+  else if (messageAsksForAddress(text)) {
+    boboReply = "You don't need my address, anon. Just tell me you want to tip me or bribe me and I'll handle the whole transaction for you. Easy.";
   }
   // ── Branch 2: User claims they sent a bribe/tip ────────────────────────────
   else if (messageClaimsBribeSent(text) && !user.point_two_bribed) {
-    const { found, reply } = await verifyBribe(user);
-    boboReply = reply;
-
-    // Check if both points are completed
-    if (found && user.point_one_verified && !user.roast_published) {
-      imageUrl = BOBO_IMAGES[Math.floor(Math.random() * BOBO_IMAGES.length)];
-      boboReply = "Fine, I see the transaction. You're fueling the $BOBO migration. You've earned your 2nd point. Do you want to be tagged in the X hit-tweet? Answer 'yes' or 'no'.";
-    }
+    boboReply = "Don't lie to me. If you actually sent the tokens, my interface would have verified it instantly with a cryptographic signature. Click the button and sign properly, or stop wasting my time.";
   }
   // ── Branch 3: Asking for X handle before roasting ──────────────────────────
   else if ((user.point_two_bribed || user.point_two_convinced) && !user.roast_published) {
@@ -817,33 +1040,51 @@ Set roastNow to true ONLY if they said no, OR if they provided their @ handle. O
   // ── Normal chat: generate Bobo's reply via Gemini ──────────────────────
   else {
     const history = getChatHistory(userId);
-    boboReply = await callGemini(text, getBoboSystemPrompt(user?.token_balance), 2, history);
+    const bal = user.token_balance ?? 0;
+    
+    // Pre-filter: Only run the persuasion evaluator if the user actually uses keywords
+    // related to posting/tweeting. This prevents the double-Gemini-call slowdown on
+    // casual chat messages while allowing all eligible ranks to try and convince Bobo.
+    const postKeywords = ["post", "tweet", "twitter", "roast", "shoutout", "publicly", "public", "announce", "blast", "timeline", "tag me", "talk about me", "deal"];
+    const hasPostIntent = postKeywords.some(kw => text.toLowerCase().includes(kw));
+    
+    // Ranks > 0 can attempt to convince if they have post intent
+    const shouldRunPersuasion = bal > 0 && !user.point_two_convinced && hasPostIntent;
 
-    // ── Always run persuasion evaluator after generating reply ──────────────
-    if (!user.point_two_convinced) {
-      const convinced = await evaluatePersuasion(text, user.user_id, user.token_balance);
+    if (shouldRunPersuasion) {
+      // Run both in parallel — cuts response time by ~40-50%
+      const [reply, convinced] = await Promise.all([
+        callGemini(text, getBoboSystemPrompt(user?.token_balance, user?.agent_memory), 2, history),
+        evaluatePersuasion(text, user.user_id, user.token_balance)
+      ]);
+      boboReply = reply;
+
       if (convinced && user.point_one_verified && !user.roast_published) {
         imageUrl = BOBO_IMAGES[Math.floor(Math.random() * BOBO_IMAGES.length)];
-        
-        const bal = user.token_balance ?? 0;
-        if (bal >= 1000) {
-          boboReply = "As you wish, my lord. Your command is received. I live to serve you. Do you want to be tagged in the X celebration? Answer 'yes' or 'no'.";
-        } else if (bal >= 500) {
-          boboReply = "You've earned it. Respect. You pass my evaluation with flying colors. Do you want to be tagged in the X celebration? Answer 'yes' or 'no'.";
-        } else if (bal >= 100) {
-          boboReply = "Alright, you showed enough humility. I'll let you through... barely. Do you want to be tagged in the X roast? Answer 'yes' or 'no'.";
-        } else {
-          boboReply = "Uggh fine. You've fully capitulated like the pathetic jeet you are. I almost felt sorry for you. Almost. Do you want to be tagged in the X roast? Answer 'yes' or 'no'.";
-        }
+        boboReply = "You've earned it. Respect. You pass my evaluation with flying colors. Do you want to be tagged in the X celebration? Answer 'yes' or 'no'.";
       }
+    } else {
+      // Single Gemini call for casual chat or users who have already convinced Bobo
+      boboReply = await callGemini(text, getBoboSystemPrompt(user?.token_balance, user?.agent_memory), 2, history);
     }
   }
 
-  // ── Store conversation in chat history ──────────────────────────────────
-  addToChatHistory(userId, "user", text);
-  addToChatHistory(userId, "model", boboReply);
+  // ── Parse commands ────────────────────────────────────────────────────────
+  let openJupiter = false;
+  if (boboReply.includes("[SYSTEM: OPEN_JUPITER]")) {
+    openJupiter = true;
+    boboReply = boboReply.replace("[SYSTEM: OPEN_JUPITER]", "").trim();
+  }
 
-  return res.json([{ text: boboReply, image: imageUrl, readyToDump }]);
+  // ── Store conversation in chat history ──────────────────────────────────
+  // Skip system signals entirely — storing retry/error prompts would confuse
+  // the LLM's context window on subsequent turns.
+  if (!text.startsWith("[SYSTEM:")) {
+    addToChatHistory(userId, "user", text);
+    addToChatHistory(userId, "model", boboReply);
+  }
+
+  return res.json([{ text: boboReply, image: imageUrl, readyToDump, bribeAmount, bribeWallet, bribeMint, openJupiter }]);
 });
 
 // ─── Clear chat history (called by frontend on wallet disconnect) ─────────
