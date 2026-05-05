@@ -494,7 +494,7 @@ export default function Home() {
 
       <div
         ref={containerRef}
-        className={`w-full max-w-5xl lg:max-w-6xl sketch-border p-2 sm:p-3 md:p-5 bg-[#6f452d] text-[#fee1bf] border-[4px] border-[#261c1a] relative z-10 shadow-[8px_8px_0_0_#261c1a]${(isChatOpen && !completionTransitioned) ? ' flex flex-col h-[calc(100vh-4.5rem)] sm:h-[calc(100vh-2rem)]' : ''}`}
+        className={`w-full max-w-5xl lg:max-w-6xl sketch-border p-2 sm:p-3 md:p-5 bg-[#6f452d] text-[#fee1bf] border-[4px] border-[#261c1a] relative z-10 shadow-[8px_8px_0_0_#261c1a]${(isChatOpen && !completionTransitioned) ? ' flex flex-col h-[calc(100vh-4.5rem)] sm:h-[calc(100vh-2rem)]' : ''}${(userData?.roast_published) ? ' max-h-[calc(100vh-2rem)] overflow-hidden' : ''}`}
         style={{}}
       >
         {/* Drag handle — grab the title bar to move the window */}
@@ -702,13 +702,13 @@ export default function Home() {
 
         {connected && userData?.roast_published && (
           <div
-            className="w-full mx-auto p-6 md:p-8 border-[4px] border-[#261c1a] bg-[#fee1bf] text-[#261c1a] rounded-[15px_225px_15px_255px/255px_15px_225px_15px] flex flex-col items-center justify-center gap-6"
+            className="w-full mx-auto p-4 sm:p-5 md:p-6 border-[4px] border-[#261c1a] bg-[#fee1bf] text-[#261c1a] rounded-[15px_225px_15px_255px/255px_15px_225px_15px] flex flex-col items-center justify-center gap-3 sm:gap-4"
             style={{ boxShadow: 'inset 4px 4px 14px rgba(38,28,26,0.18), inset -2px -2px 8px rgba(38,28,26,0.08), 4px 4px 0 0 #261c1a' }}
           >
             <style jsx>{`
               @keyframes levitate {
                 0% { transform: translateY(0px); }
-                50% { transform: translateY(-15px); }
+                50% { transform: translateY(-10px); }
                 100% { transform: translateY(0px); }
               }
               .levitate-img {
@@ -716,21 +716,21 @@ export default function Home() {
               }
             `}</style>
 
-            <p className="font-black text-4xl sm:text-5xl md:text-6xl uppercase text-center text-[#be0129] leading-none mb-2">DO NOT DISTURB</p>
+            <p className="font-black text-2xl sm:text-3xl md:text-4xl uppercase text-center text-[#be0129] leading-none">DO NOT DISTURB</p>
 
-            <div className="flex justify-center items-center h-[200px] sm:h-[250px] md:h-[550px] w-full mt-4">
+            <div className="flex justify-center items-center h-[140px] sm:h-[180px] md:h-[280px] w-full">
               <img
                 src={`/images/bobo-sleeping/${sleepFrame}.webp`}
                 alt="Bobo is sleeping"
-                className="levitate-img object-contain h-full max-w-full drop-shadow-[0_15px_15px_rgba(38,28,26,0.25)]"
+                className="levitate-img object-contain h-full max-w-full drop-shadow-[0_10px_10px_rgba(38,28,26,0.25)]"
               />
             </div>
 
-            <p className="font-bold text-center text-xl sm:text-2xl md:text-4xl leading-tight mt-6 sm:mt-8 md:mt-12">Bobo is sleeping. He is a lil bit tired of typing.</p>
+            <p className="font-bold text-center text-sm sm:text-base md:text-xl leading-tight">Bobo is sleeping. He is a lil bit tired of typing.</p>
 
-            <div className="bg-[#6f452d] text-[#fee1bf] p-4 w-full max-w-md border-[3px] border-[#261c1a] sketch-border flex flex-col items-center gap-2 mt-4">
-              <p className="text-center font-bold text-lg opacity-90 uppercase">Wait</p>
-              <span className="font-black text-4xl text-[#be0129] bg-[#fee1bf] px-4 py-2 sketch-border border-2 border-[#261c1a]">
+            <div className="bg-[#6f452d] text-[#fee1bf] p-3 w-full max-w-xs sm:max-w-sm border-[3px] border-[#261c1a] sketch-border flex flex-col items-center gap-1">
+              <p className="text-center font-bold text-sm opacity-90 uppercase">Wait</p>
+              <span className="font-black text-2xl sm:text-3xl text-[#be0129] bg-[#fee1bf] px-3 py-1 sketch-border border-2 border-[#261c1a]">
                 {cooldownTimeLeft || "calculating..."}
               </span>
             </div>
