@@ -403,7 +403,7 @@ ${chatContextStr}
 ${getBoboSystemPrompt(user?.token_balance, user?.agent_memory)}
 
 Based on your current mood of TOTAL REVERENCE, write a tweet declaring this person a DIVINITY of on-chain trading.
-${handleToTag ? `Tag them directly as ${handleToTag}.` : `Reference their wallet: ${truncateWallet(solanaWallet)}.`}
+${handleToTag ? `Include their tag ${handleToTag} in the tweet — but NEVER start the tweet with the @ symbol. Put a word, emoji, or phrase before the tag.` : `Reference their wallet: ${truncateWallet(solanaWallet)}.`}
 
 Your tweet must:
 - Declare them as a trading god / divinity that the market must bow to
@@ -426,7 +426,7 @@ Maximum 280 characters. Do NOT use quotes around the output. No hashtags.
 ${getBoboSystemPrompt(user?.token_balance, user?.agent_memory)}
 
 Based on your current mood of RESPECT, write a tweet publicly validating this person as smartmoney.
-${handleToTag ? `Tag them directly as ${handleToTag}.` : `Reference their wallet: ${truncateWallet(solanaWallet)}.`}
+${handleToTag ? `Include their tag ${handleToTag} in the tweet — but NEVER start the tweet with the @ symbol. Put a word, emoji, or phrase before the tag.` : `Reference their wallet: ${truncateWallet(solanaWallet)}.`}
 
 Your tweet must:
 - Acknowledge their solid on-chain strategy with genuine respect
@@ -448,7 +448,7 @@ Maximum 280 characters. Do NOT use quotes around the output. No hashtags.
 ${getBoboSystemPrompt(user?.token_balance, user?.agent_memory)}
 
 Write a devastating, viral hit-tweet brutally roasting this specific user's on-chain transaction history.
-${handleToTag ? `Start the tweet by tagging them directly as ${handleToTag}. Talk to them personally.` : `Include this wallet identifier: ${truncateWallet(solanaWallet)}.`}
+${handleToTag ? `Include their tag ${handleToTag} in the tweet — but NEVER start the tweet with the @ symbol. Put a word, emoji, or phrase before the tag so it shows as a public post, not a reply.` : `Include this wallet identifier: ${truncateWallet(solanaWallet)}.`}
 
 Your tweet must:
 - Be incredibly punchy, ruthless, and funny.
@@ -473,6 +473,14 @@ ${parsedData}
     if (!roastText || roastText.startsWith("API Error:") || roastText.startsWith("I'm literally rate-limited") || roastText.startsWith("I'm crashing")) {
       console.error("Roast aborted — Gemini returned an error:", roastText);
       return;
+    }
+
+    // Guard: tweets starting with @ are classified as replies by Twitter.
+    // Prepend a bear emoji to force it into a standalone post.
+    let finalTweet = roastText;
+    if (finalTweet.trimStart().startsWith("@")) {
+      finalTweet = "🐻 " + finalTweet.trimStart();
+      console.log("[TWEET] Prepended emoji — original started with @, would have been a reply.");
     }
 
     const oauth = new OAuth({
@@ -502,7 +510,7 @@ ${parsedData}
     const twRes = await fetch(request_data.url, {
       method: request_data.method,
       headers,
-      body: JSON.stringify({ text: roastText.substring(0, 280) })
+      body: JSON.stringify({ text: finalTweet.substring(0, 280) })
     });
 
     if (!twRes.ok) {
