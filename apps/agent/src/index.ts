@@ -1000,37 +1000,76 @@ app.post("/:agentId/message", async (req, res) => {
       handleEvalPrompt = `You are Bobo the Bear. The user is a wealthy Whale/GOD KOL who earned their 2nd point and was asked if they want to be tagged on X in their celebration tweet.
 User message: "${text}"
 
-If they say yes, praise them for wanting the spotlight and ask for their @ explicitly.
-If they say no, respectfully accept their privacy and indicate you're proceeding without an @.
-If they provided an @ handle, praise them, accept it, and indicate you are proceeding with the tweet.
-Respond ONLY with valid JSON exactly like this: { "reply": "...", "roastNow": boolean, "handleExtracted": "string or null" }
-Set roastNow to true ONLY if they said no, OR if they provided their @ handle. Otherwise false.`;
+Possible cases:
+- They said yes AND included an @ handle in the same message (e.g. "yes my handle is @foo") → extract the handle, proceed, set roastNow: true.
+- They only said yes (no handle yet) → ask for their @ handle explicitly, set roastNow: false.
+- They said no → accept their privacy, proceed without a handle, set roastNow: true, handleExtracted: null.
+- They provided ONLY an @ handle → accept it, proceed, set roastNow: true.
+
+Respond ONLY with valid JSON on a single line, no markdown, no code block:
+{ "reply": "your message here", "roastNow": true_or_false, "handleExtracted": "@handle_or_null" }
+IMPORTANT: handleExtracted must be null (not the string "null") when there is no handle.`;
     } else {
       handleEvalPrompt = `You are Bobo the Bear. The user earned their 2nd point and was asked if they want to be tagged on X in the roast.
 User message: "${text}"
 
-If they say yes, insult them for wanting attention and ask for their @ explicitly.
-If they say no, insult them for being a coward and indicate you're proceeding without an @.
-If they provided an @ handle (either directly or after saying yes), insult them, accept it, and indicate you are proceeding.
-Respond ONLY with valid JSON exactly like this: { "reply": "...", "roastNow": boolean, "handleExtracted": "string or null" }
-Set roastNow to true ONLY if they said no, OR if they provided their @ handle. Otherwise false.`;
+Possible cases:
+- They said yes AND included an @ handle in the same message (e.g. "yes my handle is @foo") → extract the handle, insult them for wanting attention, proceed, set roastNow: true.
+- They only said yes (no handle yet) → insult them for wanting attention and ask for their @ explicitly, set roastNow: false.
+- They said no → insult them for being a coward, proceed without a handle, set roastNow: true, handleExtracted: null.
+- They provided ONLY an @ handle → insult them, accept it, proceed, set roastNow: true.
+
+Respond ONLY with valid JSON on a single line, no markdown, no code block:
+{ "reply": "your message here", "roastNow": true_or_false, "handleExtracted": "@handle_or_null" }
+IMPORTANT: handleExtracted must be null (not the string "null") when there is no handle.`;
     }
 
     const raw = await callGemini(handleEvalPrompt);
-    let parsed: any = { reply: "What?", roastNow: false, handleExtracted: null };
+    let parsed: any = { reply: null, roastNow: false, handleExtracted: null };
     try {
-      const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-      const jsonString = jsonMatch ? jsonMatch[1] : raw;
-      parsed = JSON.parse(jsonString.trim());
-    } catch {
-      const match = raw.match(/"roastNow"\s*:\s*(true|false)/);
-      if (match) parsed.roastNow = match[1] === "true";
+      // Strip markdown code fences if present, then parse
+      const stripped = raw.replace(/```(?:json)?\s*|\s*```/g, "").trim();
+      // Find first JSON object in the response
+      const jsonStart = stripped.indexOf("{");
+      const jsonEnd = stripped.lastIndexOf("}");
+      if (jsonStart !== -1 && jsonEnd !== -1) {
+        parsed = JSON.parse(stripped.slice(jsonStart, jsonEnd + 1));
+      } else {
+        parsed = JSON.parse(stripped);
+      }
+    } catch (e) {
+      console.error("[HANDLE] JSON parse failed, using regex fallback. Raw:", raw);
+      // Robust fallback: roastNow
+      const roastMatch = raw.match(/"roastNow"\s*:\s*(true|false)/i);
+      if (roastMatch) parsed.roastNow = roastMatch[1].toLowerCase() === "true";
+      // Robust fallback: reply (handles @ signs and special chars)
+      const replyMatch = raw.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*?)"/);
+      if (replyMatch) parsed.reply = replyMatch[1].replace(/\\"/g, '"');
+      // Robust fallback: handle (extract @mention from raw text)
+      const handleMatch = raw.match(/"handleExtracted"\s*:\s*"(@[\w_]+)"/);
+      if (handleMatch) parsed.handleExtracted = handleMatch[1];
+    }
 
-      const replyMatch = raw.match(/"reply"\s*:\s*"([^"]+)"/);
-      parsed.reply = replyMatch ? replyMatch[1] : "Look, just give me a simple answer: yes, no, or an @ handle. Don't make me think.";
+    // Final safety: if we still have no reply, give a neutral fallback
+    if (!parsed.reply) {
+      // Try to extract any @mention directly from the user's message
+      const directHandle = text.match(/@[\w_]+/);
+      if (directHandle) {
+        parsed.handleExtracted = directHandle[0];
+        parsed.roastNow = true;
+        parsed.reply = `${directHandle[0]}? Fine. Proceeding.`;
+      } else {
+        parsed.reply = "Yes or no. Do you want to be tagged? And if yes, what's your @ handle?";
+      }
+    }
+
+    // Normalize "null" string to actual null
+    if (parsed.handleExtracted === "null" || parsed.handleExtracted === "") {
+      parsed.handleExtracted = null;
     }
 
     boboReply = parsed.reply;
+    console.log(`[HANDLE] roastNow=${parsed.roastNow} | handle=${parsed.handleExtracted} | reply length=${boboReply.length}`);
 
     if (parsed.roastNow) {
       executeWalletRoast(user.user_id, user.solana_wallet!, parsed.handleExtracted).catch(console.error);
