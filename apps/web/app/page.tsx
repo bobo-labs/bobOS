@@ -117,8 +117,7 @@ export default function Home() {
 
         // Update cooldown timer if they are in the roasted state
         if (data?.roast_published && data?.last_roast_published_at) {
-          let publishedAt = new Date(data.last_roast_published_at).getTime();
-          publishedAt += new Date().getTimezoneOffset() * 60000;
+          const publishedAt = new Date(data.last_roast_published_at).getTime();
           const cooldownSeconds = parseInt(process.env.NEXT_PUBLIC_COOLDOWN_TIME || "21600", 10);
           const unlockTime = publishedAt + (cooldownSeconds * 1000);
           const diff = unlockTime - Date.now();
@@ -146,8 +145,7 @@ export default function Home() {
     getUserState(publicKey.toBase58()).then(data => {
       setUserData(data);
       if (data?.roast_published && data?.last_roast_published_at) {
-        let publishedAt = new Date(data.last_roast_published_at).getTime();
-        publishedAt += new Date().getTimezoneOffset() * 60000;
+        const publishedAt = new Date(data.last_roast_published_at).getTime();
         const cooldownSeconds = parseInt(process.env.NEXT_PUBLIC_COOLDOWN_TIME || "21600", 10);
         const unlockTime = publishedAt + (cooldownSeconds * 1000);
         const diff = unlockTime - Date.now();
