@@ -205,7 +205,7 @@ async function callGemini(
   } else {
     // Lower temperature for evaluator/JSON calls = precise, reliable outputs
     // maxOutputTokens caps output for evaluator calls that should return short JSON
-    body.generationConfig = { temperature: 0.3, maxOutputTokens: purpose === "evaluator" ? 50 : undefined };
+    body.generationConfig = { temperature: 0.3, maxOutputTokens: purpose === "evaluator" ? 300 : undefined };
   }
 
   for (let attempt = 0; attempt <= retries; attempt++) {
