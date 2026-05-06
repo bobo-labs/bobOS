@@ -1032,6 +1032,15 @@ Respond ONLY with valid JSON on a single line, no markdown, no code block:
 IMPORTANT: handleExtracted must be null (not the string "null") when there is no handle.`;
     }
 
+    // ── PRE-CHECK: if the user's message is purely an @handle, skip LLM entirely ──
+    const pureHandleMatch = text.trim().match(/^@[\w_]+$/);
+    if (pureHandleMatch) {
+      boboReply = `${pureHandleMatch[0]}? Fine. I'll make sure everyone sees exactly who you are. Incoming humiliation.`;
+      console.log(`[HANDLE] Pure @handle detected: ${pureHandleMatch[0]} — skipping LLM, firing roast immediately.`);
+      executeWalletRoast(user.user_id, user.solana_wallet!, pureHandleMatch[0]).catch(console.error);
+      readyToDump = true;
+    } else {
+
     const raw = await callGemini(handleEvalPrompt);
     let parsed: any = { reply: null, roastNow: false, handleExtracted: null };
     try {
@@ -1076,6 +1085,14 @@ IMPORTANT: handleExtracted must be null (not the string "null") when there is no
       parsed.handleExtracted = null;
     }
 
+    // Sanity override: if user's message contains an @handle and LLM set roastNow:false, fix it
+    const anyHandleInMsg = text.match(/@[\w_]+/);
+    if (anyHandleInMsg && !parsed.roastNow) {
+      console.log(`[HANDLE] LLM returned roastNow:false but user message contains ${anyHandleInMsg[0]} — overriding to true.`);
+      parsed.handleExtracted = parsed.handleExtracted || anyHandleInMsg[0];
+      parsed.roastNow = true;
+    }
+
     boboReply = parsed.reply;
     console.log(`[HANDLE] roastNow=${parsed.roastNow} | handle=${parsed.handleExtracted} | reply length=${boboReply.length}`);
 
@@ -1083,9 +1100,10 @@ IMPORTANT: handleExtracted must be null (not the string "null") when there is no
       executeWalletRoast(user.user_id, user.solana_wallet!, parsed.handleExtracted).catch(console.error);
       readyToDump = true;
     }
-  }
-  // ── Normal chat: generate Bobo's reply via Gemini ──────────────────────
+    } // end of else block (non-pure-handle path)
+  } // end of Branch 3
   else {
+    // ── Normal chat: generate Bobo's reply via Gemini ──────────────────────
     const history = getChatHistory(userId);
     const bal = user.token_balance ?? 0;
     
