@@ -10,9 +10,9 @@ export const metadata = {
     siteName: "bobo_OS",
     images: [
       {
-        url: "/images/bobo-logo.png",
+        url: "/images/bobo-ascii.png",
         width: 800,
-        height: 600,
+        height: 800,
         alt: "Bobo the Bear",
       },
     ],
@@ -21,7 +21,7 @@ export const metadata = {
     card: "summary_large_image",
     title: "bobo_OS",
     description: "Your portfolio is going to zero.",
-    images: ["/images/bobo-logo.png"],
+    images: ["/images/bobo-ascii.png"],
   },
 };
 
