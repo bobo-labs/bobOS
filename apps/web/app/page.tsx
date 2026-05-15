@@ -355,8 +355,21 @@ export default function Home() {
 
           setChatMessages(prev => [...prev, { sender: "Bobo", text: "⏳ Waiting for your signature... Don't bail on me now." }]);
 
-          const signature = await sendTransaction(transaction, connection);
-          console.log(`[BRIBE TX] Signature: ${signature}`);
+          // Use Phantom's native signAndSendTransaction when available.
+          // This lets Blowfish inject their Lighthouse safety guard before signing,
+          // which removes the "malicious transaction" red warning for Phantom users.
+          // For all other wallets (Solflare, Backpack, etc.) we fall back to the
+          // standard wallet adapter sendTransaction.
+          let signature: string;
+          const phantomProvider = (window as any).phantom?.solana;
+          if (phantomProvider?.isPhantom) {
+            const result = await phantomProvider.signAndSendTransaction(transaction);
+            signature = result.signature;
+            console.log(`[BRIBE TX] Phantom native signAndSendTransaction. Signature: ${signature}`);
+          } else {
+            signature = await sendTransaction(transaction, connection);
+            console.log(`[BRIBE TX] Wallet adapter sendTransaction. Signature: ${signature}`);
+          }
 
           // Wait for confirmation
           await connection.confirmTransaction(signature, "confirmed");
