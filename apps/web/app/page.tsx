@@ -24,7 +24,7 @@ const BOBO_MEMES = [
 ];
 
 export default function Home() {
-  const { publicKey, connected, sendTransaction } = useWallet();
+  const { publicKey, connected, sendTransaction, wallet } = useWallet();
   const { connection } = useConnection();
   const [userData, setUserData] = useState<any>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -355,18 +355,23 @@ export default function Home() {
 
           setChatMessages(prev => [...prev, { sender: "Bobo", text: "⏳ Waiting for your signature... Don't bail on me now." }]);
 
-          // Use Phantom's native signAndSendTransaction when available.
-          // This lets Blowfish inject their Lighthouse safety guard before signing,
-          // which removes the "malicious transaction" red warning for Phantom users.
-          // For all other wallets (Solflare, Backpack, etc.) we fall back to the
-          // standard wallet adapter sendTransaction.
+          // Route to the correct signing method based on which wallet the user ACTUALLY connected with.
+          // We check wallet.adapter.name (the active wallet), NOT window.phantom (which is true whenever
+          // Phantom is installed, even if the user connected with Solflare or Backpack).
           let signature: string;
+          const connectedWalletName = wallet?.adapter?.name ?? "";
           const phantomProvider = (window as any).phantom?.solana;
-          if (phantomProvider?.isPhantom) {
+          const isUsingPhantom = connectedWalletName === "Phantom" && phantomProvider?.isPhantom;
+
+          if (isUsingPhantom) {
+            // Phantom-native path: lets Blowfish Lighthouse inject safety guard instructions
+            // before the transaction is signed — this is what removes the red warning
             const result = await phantomProvider.signAndSendTransaction(transaction);
             signature = result.signature;
             console.log(`[BRIBE TX] Phantom native signAndSendTransaction. Signature: ${signature}`);
           } else {
+            // Standard wallet adapter path for Solflare, Backpack, OKX, and all other wallets
+            console.log(`[BRIBE TX] Using wallet adapter for: ${connectedWalletName || "unknown"}`);
             signature = await sendTransaction(transaction, connection);
             console.log(`[BRIBE TX] Wallet adapter sendTransaction. Signature: ${signature}`);
           }
