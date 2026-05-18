@@ -25,7 +25,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: [
+    "https://ai.bobolabs.xyz",
+    "https://web-production-f4e78.up.railway.app",
+    "http://localhost:3000"
+  ]
+}));
 app.use(express.json());
 
 // ─── Stable agent descriptor ────────────────────────────────────────────────
