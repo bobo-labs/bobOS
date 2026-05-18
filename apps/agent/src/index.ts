@@ -386,7 +386,7 @@ async function executeWalletRoast(userId: string, solanaWallet: string, handleTo
 
     // Pull recent chat context to see if they tipped
     const chatHistory = getChatHistory(userId);
-    const chatContextStr = chatHistory.length > 0 
+    const chatContextStr = chatHistory.length > 0
       ? chatHistory.slice(-8).map(m => `${m.role === 'model' ? 'Bobo' : 'User'}: ${m.text}`).join('\n')
       : "No recent chat context.";
 
@@ -904,7 +904,7 @@ app.post("/:agentId/message", async (req, res) => {
   } else if (text === "[SYSTEM: BRIBE_CONFIRMED]") {
     bribeRetryState.delete(userId);
     bribeNegotiationState.delete(userId);
-    
+
     await db.update(users).set({ point_two_bribed: true }).where(eq(users.user_id as any, userId as any) as any);
     user.point_two_bribed = true;
 
@@ -1047,78 +1047,78 @@ IMPORTANT: handleExtracted must be null (not the string "null") when there is no
       readyToDump = true;
     } else {
 
-    const raw = await callGemini(handleEvalPrompt);
-    let parsed: any = { reply: null, roastNow: false, handleExtracted: null };
-    try {
-      // Strip markdown code fences if present, then parse
-      const stripped = raw.replace(/```(?:json)?\s*|\s*```/g, "").trim();
-      // Find first JSON object in the response
-      const jsonStart = stripped.indexOf("{");
-      const jsonEnd = stripped.lastIndexOf("}");
-      if (jsonStart !== -1 && jsonEnd !== -1) {
-        parsed = JSON.parse(stripped.slice(jsonStart, jsonEnd + 1));
-      } else {
-        parsed = JSON.parse(stripped);
+      const raw = await callGemini(handleEvalPrompt);
+      let parsed: any = { reply: null, roastNow: false, handleExtracted: null };
+      try {
+        // Strip markdown code fences if present, then parse
+        const stripped = raw.replace(/```(?:json)?\s*|\s*```/g, "").trim();
+        // Find first JSON object in the response
+        const jsonStart = stripped.indexOf("{");
+        const jsonEnd = stripped.lastIndexOf("}");
+        if (jsonStart !== -1 && jsonEnd !== -1) {
+          parsed = JSON.parse(stripped.slice(jsonStart, jsonEnd + 1));
+        } else {
+          parsed = JSON.parse(stripped);
+        }
+      } catch (e) {
+        console.error("[HANDLE] JSON parse failed, using regex fallback. Raw:", raw);
+        // Robust fallback: roastNow
+        const roastMatch = raw.match(/"roastNow"\s*:\s*(true|false)/i);
+        if (roastMatch) parsed.roastNow = roastMatch[1].toLowerCase() === "true";
+        // Robust fallback: reply (handles @ signs and special chars)
+        const replyMatch = raw.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*?)"/);
+        if (replyMatch) parsed.reply = replyMatch[1].replace(/\\"/g, '"');
+        // Robust fallback: handle (extract @mention from raw text)
+        const handleMatch = raw.match(/"handleExtracted"\s*:\s*"(@[\w_]+)"/);
+        if (handleMatch) parsed.handleExtracted = handleMatch[1];
       }
-    } catch (e) {
-      console.error("[HANDLE] JSON parse failed, using regex fallback. Raw:", raw);
-      // Robust fallback: roastNow
-      const roastMatch = raw.match(/"roastNow"\s*:\s*(true|false)/i);
-      if (roastMatch) parsed.roastNow = roastMatch[1].toLowerCase() === "true";
-      // Robust fallback: reply (handles @ signs and special chars)
-      const replyMatch = raw.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*?)"/);
-      if (replyMatch) parsed.reply = replyMatch[1].replace(/\\"/g, '"');
-      // Robust fallback: handle (extract @mention from raw text)
-      const handleMatch = raw.match(/"handleExtracted"\s*:\s*"(@[\w_]+)"/);
-      if (handleMatch) parsed.handleExtracted = handleMatch[1];
-    }
 
-    // Final safety: if we still have no reply, give a neutral fallback
-    if (!parsed.reply) {
-      // Try to extract any @mention directly from the user's message
-      const directHandle = text.match(/@[\w_]+/);
-      if (directHandle) {
-        parsed.handleExtracted = directHandle[0];
+      // Final safety: if we still have no reply, give a neutral fallback
+      if (!parsed.reply) {
+        // Try to extract any @mention directly from the user's message
+        const directHandle = text.match(/@[\w_]+/);
+        if (directHandle) {
+          parsed.handleExtracted = directHandle[0];
+          parsed.roastNow = true;
+          parsed.reply = `${directHandle[0]}? Fine. Proceeding.`;
+        } else {
+          parsed.reply = "Yes or no. Do you want to be tagged? And if yes, what's your @ handle?";
+        }
+      }
+
+      // Normalize "null" string to actual null
+      if (parsed.handleExtracted === "null" || parsed.handleExtracted === "") {
+        parsed.handleExtracted = null;
+      }
+
+      // Sanity override: if user's message contains an @handle and LLM set roastNow:false, fix it
+      const anyHandleInMsg = text.match(/@[\w_]+/);
+      if (anyHandleInMsg && !parsed.roastNow) {
+        console.log(`[HANDLE] LLM returned roastNow:false but user message contains ${anyHandleInMsg[0]} — overriding to true.`);
+        parsed.handleExtracted = parsed.handleExtracted || anyHandleInMsg[0];
         parsed.roastNow = true;
-        parsed.reply = `${directHandle[0]}? Fine. Proceeding.`;
-      } else {
-        parsed.reply = "Yes or no. Do you want to be tagged? And if yes, what's your @ handle?";
       }
-    }
 
-    // Normalize "null" string to actual null
-    if (parsed.handleExtracted === "null" || parsed.handleExtracted === "") {
-      parsed.handleExtracted = null;
-    }
+      boboReply = parsed.reply;
+      console.log(`[HANDLE] roastNow=${parsed.roastNow} | handle=${parsed.handleExtracted} | reply length=${boboReply.length}`);
 
-    // Sanity override: if user's message contains an @handle and LLM set roastNow:false, fix it
-    const anyHandleInMsg = text.match(/@[\w_]+/);
-    if (anyHandleInMsg && !parsed.roastNow) {
-      console.log(`[HANDLE] LLM returned roastNow:false but user message contains ${anyHandleInMsg[0]} — overriding to true.`);
-      parsed.handleExtracted = parsed.handleExtracted || anyHandleInMsg[0];
-      parsed.roastNow = true;
-    }
-
-    boboReply = parsed.reply;
-    console.log(`[HANDLE] roastNow=${parsed.roastNow} | handle=${parsed.handleExtracted} | reply length=${boboReply.length}`);
-
-    if (parsed.roastNow) {
-      executeWalletRoast(user.user_id, user.solana_wallet!, parsed.handleExtracted).catch(console.error);
-      readyToDump = true;
-    }
+      if (parsed.roastNow) {
+        executeWalletRoast(user.user_id, user.solana_wallet!, parsed.handleExtracted).catch(console.error);
+        readyToDump = true;
+      }
     } // end of else block (non-pure-handle path)
   } // end of Branch 3
   else {
     // ── Normal chat: generate Bobo's reply via Gemini ──────────────────────
     const history = getChatHistory(userId);
     const bal = user.token_balance ?? 0;
-    
+
     // Pre-filter: Only run the persuasion evaluator if the user actually uses keywords
     // related to posting/tweeting. This prevents the double-Gemini-call slowdown on
     // casual chat messages while allowing all eligible ranks to try and convince Bobo.
     const postKeywords = ["post", "tweet", "twitter", "roast", "shoutout", "publicly", "public", "announce", "blast", "timeline", "tag me", "talk about me", "deal"];
     const hasPostIntent = postKeywords.some(kw => text.toLowerCase().includes(kw));
-    
+
     // Ranks > 0 can attempt to convince if they have post intent
     const shouldRunPersuasion = bal > 0 && !user.point_two_convinced && hasPostIntent;
 
