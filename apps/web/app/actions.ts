@@ -81,7 +81,10 @@ export async function submitChat(walletAddress: string, message: string) {
     // If the agent is down, the fetch below will throw and be caught by the catch block.
     const messageRes = await fetch(`${agentUrl}/${agentId}/message`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        "x-internal-secret": process.env.INTERNAL_API_SECRET || ""
+      },
       body: JSON.stringify({ 
          text: message,
          userId: user.user_id,

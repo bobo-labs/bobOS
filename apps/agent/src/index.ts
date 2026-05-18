@@ -867,6 +867,15 @@ app.post("/:agentId/message", async (req, res) => {
     return res.json([{ text: "Say something or connect your wallet first." }]);
   }
 
+  // Verify internal secret to prevent signal spoofing/bribe bypasses
+  const internalSecret = req.headers["x-internal-secret"];
+  const isSystemAuthorized = internalSecret && internalSecret === process.env.INTERNAL_API_SECRET;
+
+  if (text.startsWith("[SYSTEM:") && !isSystemAuthorized) {
+    console.warn(`[SECURITY WARN] Unauthorized system command execution attempted: "${text}" from IP ${req.ip}`);
+    return res.json([{ text: "Bypassing payments is not allowed, anon." }]);
+  }
+
   const user = await getUserById(userId).catch(() => null);
   if (!user) {
     return res.json([{ text: "I don't know who you are. Connect a wallet." }]);
