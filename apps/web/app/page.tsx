@@ -305,6 +305,7 @@ export default function Home() {
           // Determine token decimals from the sender's account and verify they have the funds!
           let decimals = 9; // default assumption
           let senderAccountAmount = BigInt(0);
+          let accountReadSucceeded = false;
 
           try {
             // Fetch mint info to get precise decimals
@@ -315,14 +316,18 @@ export default function Home() {
 
             const senderAccount = await getAccount(connection, senderATA);
             senderAccountAmount = senderAccount.amount;
+            accountReadSucceeded = true;
           } catch (e) {
-            console.warn("Could not fetch sender account, wallet likely has 0 tokens.");
+            // ATA may not exist yet or RPC failed — do NOT assume zero balance.
+            // We let the transaction proceed and Solana will reject it on-chain if truly broke.
+            console.warn("Could not fetch sender token account — skipping pre-flight balance check.", e);
           }
 
           const rawAmount = BigInt(Math.round(res.bribeAmount * (10 ** decimals)));
 
-          // Prevent Phantom from showing ugly simulation errors by checking balance beforehand
-          if (senderAccountAmount < rawAmount) {
+          // Only block early if we CONFIRMED the balance and it's actually too low.
+          // If the account read failed, skip this check and let the tx proceed normally.
+          if (accountReadSucceeded && senderAccountAmount < rawAmount) {
             throw new Error("INSUFFICIENT_FUNDS");
           }
 
