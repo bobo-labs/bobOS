@@ -354,8 +354,9 @@ export default function Home() {
           );
 
           // Explicitly set feePayer and recentBlockhash to improve simulation reliability
-          const latestBlockhash = await connection.getLatestBlockhash();
-          transaction.recentBlockhash = latestBlockhash.blockhash;
+          // Using getLatestBlockhash with lastValidBlockHeight for proper mainnet confirmation tracking
+          const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+          transaction.recentBlockhash = blockhash;
           transaction.feePayer = publicKey;
 
           setChatMessages(prev => [...prev, { sender: "Bobo", text: "⏳ Waiting for your signature... Don't bail on me now." }]);
@@ -381,8 +382,8 @@ export default function Home() {
             console.log(`[BRIBE TX] Wallet adapter sendTransaction. Signature: ${signature}`);
           }
 
-          // Wait for confirmation
-          await connection.confirmTransaction(signature, "confirmed");
+          // Wait for confirmation using blockhash strategy (required on mainnet to avoid false timeouts)
+          await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
 
           setChatMessages(prev => [...prev, { sender: "Bobo", text: "✅ Transaction confirmed on-chain. Let me verify..." }]);
 
@@ -402,6 +403,9 @@ export default function Home() {
           const errMsg = txError?.message || String(txError);
           const isUserRejection = /user rejected|rejected the request|cancelled|denied/i.test(errMsg);
 
+          // Always log the real error so we can see it in Railway/browser logs
+          console.error(`[BRIBE TX] Raw error message: "${errMsg}"`, txError);
+
           if (errMsg === "INSUFFICIENT_FUNDS") {
             setChatMessages(prev => [...prev, { sender: "Bobo", text: "You don't even have enough tokens in your wallet. Are you trying to scam me? Get some funds first, poor." }]);
             // Send a specific system signal so the backend knows to clear the retry state
@@ -411,8 +415,6 @@ export default function Home() {
 
           if (isUserRejection) {
             console.warn("[BRIBE TX] User rejected the transaction.");
-          } else {
-            console.error("[BRIBE TX] Transaction failed:", txError);
           }
 
           // Notify the backend so Bobo can enter the retry negotiation state
