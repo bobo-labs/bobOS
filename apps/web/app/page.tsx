@@ -281,8 +281,39 @@ export default function Home() {
           const mintPubkey = new PublicKey(res.bribeMint);
           const destinationWallet = new PublicKey(res.bribeWallet);
 
-          // Get or create the associated token accounts
-          const senderATA = await getAssociatedTokenAddress(mintPubkey, publicKey);
+          // ── Find sender's ACTUAL token account ────────────────────────────
+          // We use getParsedTokenAccountsByOwner instead of getAssociatedTokenAddress
+          // because the user's account may not be at the standard ATA address
+          // (e.g. received via different means, Token-2022, etc).
+          // This is identical to how the backend verifyTokenHolding works.
+          const senderTokenAccounts = await connection.getParsedTokenAccountsByOwner(
+            publicKey,
+            { mint: mintPubkey }
+          );
+
+          if (senderTokenAccounts.value.length === 0) {
+            throw new Error("INSUFFICIENT_FUNDS");
+          }
+
+          // Pick the account with the highest balance (in case there are multiple)
+          const bestSenderAccount = senderTokenAccounts.value.reduce((best, curr) => {
+            const bestAmt = BigInt(best.account.data.parsed.info.tokenAmount.amount);
+            const currAmt = BigInt(curr.account.data.parsed.info.tokenAmount.amount);
+            return currAmt > bestAmt ? curr : best;
+          });
+
+          const senderATA = bestSenderAccount.pubkey;
+          const decimals: number = bestSenderAccount.account.data.parsed.info.tokenAmount.decimals;
+          const senderRawBalance = BigInt(bestSenderAccount.account.data.parsed.info.tokenAmount.amount);
+          const rawAmount = BigInt(Math.round(res.bribeAmount * (10 ** decimals)));
+
+          console.log(`[BRIBE TX] Sender ATA: ${senderATA.toBase58()} | Balance: ${senderRawBalance} | Sending: ${rawAmount}`);
+
+          if (senderRawBalance < rawAmount) {
+            throw new Error("INSUFFICIENT_FUNDS");
+          }
+
+          // ── Recipient ATA (we control this wallet so standard ATA is correct) ─
           const recipientATA = await getAssociatedTokenAddress(mintPubkey, destinationWallet);
 
           const transaction = new Transaction();
@@ -300,35 +331,6 @@ export default function Home() {
                 mintPubkey         // mint
               )
             );
-          }
-
-          // Determine token decimals from the sender's account and verify they have the funds!
-          let decimals = 9; // default assumption
-          let senderAccountAmount = BigInt(0);
-          let accountReadSucceeded = false;
-
-          try {
-            // Fetch mint info to get precise decimals
-            const mintInfo = await connection.getParsedAccountInfo(mintPubkey);
-            if (mintInfo.value && 'parsed' in mintInfo.value.data) {
-              decimals = mintInfo.value.data.parsed.info.decimals;
-            }
-
-            const senderAccount = await getAccount(connection, senderATA);
-            senderAccountAmount = senderAccount.amount;
-            accountReadSucceeded = true;
-          } catch (e) {
-            // ATA may not exist yet or RPC failed — do NOT assume zero balance.
-            // We let the transaction proceed and Solana will reject it on-chain if truly broke.
-            console.warn("Could not fetch sender token account — skipping pre-flight balance check.", e);
-          }
-
-          const rawAmount = BigInt(Math.round(res.bribeAmount * (10 ** decimals)));
-
-          // Only block early if we CONFIRMED the balance and it's actually too low.
-          // If the account read failed, skip this check and let the tx proceed normally.
-          if (accountReadSucceeded && senderAccountAmount < rawAmount) {
-            throw new Error("INSUFFICIENT_FUNDS");
           }
 
           // 1. Add Memo instruction so Phantom displays a human-readable title/description
