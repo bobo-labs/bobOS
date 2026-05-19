@@ -286,10 +286,19 @@ export default function Home() {
           // because the user's account may not be at the standard ATA address
           // (e.g. received via different means, Token-2022, etc).
           // This is identical to how the backend verifyTokenHolding works.
-          const senderTokenAccounts = await connection.getParsedTokenAccountsByOwner(
-            publicKey,
-            { mint: mintPubkey }
-          );
+          console.log(`[BRIBE TX] Attempting token lookup for mint: ${res.bribeMint}`);
+          let senderTokenAccounts;
+          try {
+            senderTokenAccounts = await connection.getParsedTokenAccountsByOwner(
+              publicKey,
+              { mint: mintPubkey }
+            );
+          } catch (rpcErr: any) {
+            // This fires when the mint address is invalid on this network
+            // (e.g. AGENT_TOKEN_MINT is set to a devnet address or a dummy value)
+            console.error(`[BRIBE TX] Mint "${res.bribeMint}" is invalid on this network:`, rpcErr.message);
+            throw new Error("INVALID_MINT");
+          }
 
           if (senderTokenAccounts.value.length === 0) {
             throw new Error("INSUFFICIENT_FUNDS");
@@ -410,8 +419,13 @@ export default function Home() {
 
           if (errMsg === "INSUFFICIENT_FUNDS") {
             setChatMessages(prev => [...prev, { sender: "Bobo", text: "You don't even have enough tokens in your wallet. Are you trying to scam me? Get some funds first, poor." }]);
-            // Send a specific system signal so the backend knows to clear the retry state
             await submitChat(publicKey.toBase58(), "[SYSTEM: INSUFFICIENT_FUNDS]");
+            return;
+          }
+
+          if (errMsg === "INVALID_MINT") {
+            setChatMessages(prev => [...prev, { sender: "Bobo", text: "Something's wrong on my end — the token configuration is broken. Check the console and ping the team." }]);
+            console.error("[BRIBE TX] AGENT_TOKEN_MINT env var is set to an invalid mainnet mint. Check Railway variables.");
             return;
           }
 
