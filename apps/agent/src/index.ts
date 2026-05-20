@@ -981,7 +981,7 @@ app.post("/:agentId/message", async (req, res) => {
       console.warn(`[BRIBE] User ${userId} sent BRIBE_CONFIRMED with invalid/missing signature: "${signature}"`);
     } else {
       // Verify on-chain that the transaction actually transferred tokens
-      const verified = await verifyBribeTransaction(signature, user.solana_wallet);
+      const verified = await verifyBribeTransaction(signature, user.solana_wallet!);
 
       if (verified) {
         await db.update(users).set({ point_two_bribed: true }).where(eq(users.user_id as any, userId as any) as any);
