@@ -316,20 +316,23 @@ export default function Home() {
           const senderRawBalance = BigInt(bestSenderAccount.account.data.parsed.info.tokenAmount.amount);
           const rawAmount = BigInt(Math.round(res.bribeAmount * (10 ** decimals)));
 
-          console.log(`[BRIBE TX] Sender ATA: ${senderATA.toBase58()} | Balance: ${senderRawBalance} | Sending: ${rawAmount}`);
+          // Detect which token program this mint uses (legacy Token vs Token-2022)
+          // pump.fun tokens use Token-2022; the owner field of the parsed account tells us which program
+          const ownerProgramId = new PublicKey(bestSenderAccount.account.owner.toString());
+          console.log(`[BRIBE TX] Sender ATA: ${senderATA.toBase58()} | Balance: ${senderRawBalance} | Sending: ${rawAmount} | Token Program: ${ownerProgramId.toBase58()}`);
 
           if (senderRawBalance < rawAmount) {
             throw new Error("INSUFFICIENT_FUNDS");
           }
 
           // ── Recipient ATA (we control this wallet so standard ATA is correct) ─
-          const recipientATA = await getAssociatedTokenAddress(mintPubkey, destinationWallet);
+          const recipientATA = await getAssociatedTokenAddress(mintPubkey, destinationWallet, false, ownerProgramId);
 
           const transaction = new Transaction();
 
           // Check if the recipient's ATA exists; if not, create it
           try {
-            await getAccount(connection, recipientATA);
+            await getAccount(connection, recipientATA, undefined, ownerProgramId);
           } catch {
             // ATA doesn't exist — add instruction to create it
             transaction.add(
@@ -337,7 +340,8 @@ export default function Home() {
                 publicKey,         // payer
                 recipientATA,      // associated token account
                 destinationWallet, // owner
-                mintPubkey         // mint
+                mintPubkey,        // mint
+                ownerProgramId     // Token-2022 aware
               )
             );
           }
@@ -360,7 +364,9 @@ export default function Home() {
               recipientATA,   // destination
               publicKey,      // owner of source
               rawAmount,      // amount in raw units
-              decimals        // decimals
+              decimals,       // decimals
+              [],             // multiSigners (none)
+              ownerProgramId  // must match the mint's token program (Token-2022 for pump.fun)
             )
           );
 
@@ -399,7 +405,7 @@ export default function Home() {
           setChatMessages(prev => [...prev, { sender: "Bobo", text: "✅ Transaction confirmed on-chain. Let me verify..." }]);
 
           // Send cryptographic proof of success to the agent autonomously
-          const verifyRes = await submitChat(publicKey.toBase58(), "[SYSTEM: BRIBE_CONFIRMED]");
+          const verifyRes = await submitChat(publicKey.toBase58(), `[SYSTEM: BRIBE_CONFIRMED:${signature}]`);
           setChatMessages(prev => [...prev, { sender: "Bobo", text: verifyRes.reply, image: verifyRes.image }]);
 
           if (verifyRes.readyToDump) {

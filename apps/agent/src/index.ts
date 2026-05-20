@@ -350,6 +350,65 @@ async function verifyTokenHolding(wallet: string, userId: string): Promise<boole
   }
 }
 
+// ─── On-Chain Bribe Verification ──────────────────────────────────────────────
+// Fetches the parsed transaction from the RPC and verifies that a real
+// transferChecked (or transfer) instruction moved tokens from the sender
+// using the expected mint, with an amount >= MIN_BRIBE_AMOUNT.
+
+async function verifyBribeTransaction(signature: string, senderWallet: string): Promise<boolean> {
+  try {
+    const rpcUrl = process.env.HELIUS_RPC_URL || `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
+    const response = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "verify-bribe",
+        method: "getTransaction",
+        params: [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }],
+      }),
+    });
+
+    const data = (await response.json()) as any;
+    const tx = data.result;
+
+    if (!tx || tx.meta?.err !== null) {
+      console.error(`[BRIBE VERIFY] Transaction not found or errored. Sig: ${signature}`);
+      return false;
+    }
+
+    // Look for a transferChecked or transfer instruction matching our expected mint and sender
+    const tokenMint = process.env.AGENT_TOKEN_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+    const instructions = tx.transaction?.message?.instructions || [];
+    const innerInstructions = tx.meta?.innerInstructions?.flatMap((ii: any) => ii.instructions) || [];
+    const allInstructions = [...instructions, ...innerInstructions];
+
+    for (const ix of allInstructions) {
+      const parsed = ix.parsed;
+      if (!parsed) continue;
+
+      if (parsed.type === "transferChecked" || parsed.type === "transfer") {
+        const info = parsed.info;
+        // Verify: the source authority is the sender and the mint matches
+        if (info.authority === senderWallet && info.mint === tokenMint) {
+          const amount = parseFloat(info.tokenAmount?.uiAmount ?? info.amount ?? "0");
+          if (amount >= MIN_BRIBE_AMOUNT) {
+            console.log(`[BRIBE VERIFY] ✓ Verified transfer of ${amount} tokens from ${senderWallet}`);
+            return true;
+          }
+        }
+      }
+    }
+
+    console.warn(`[BRIBE VERIFY] No qualifying transfer found in tx ${signature}`);
+    return false;
+  } catch (e) {
+    console.error(`[BRIBE VERIFY] RPC error:`, e);
+    return false;
+  }
+}
+
 // ─── Twitter Roast Publisher ───────────────────────────────────────────────────
 
 function truncateWallet(wallet: string): string {
@@ -910,20 +969,36 @@ app.post("/:agentId/message", async (req, res) => {
     console.log(`[BRIBE] User ${userId} had insufficient funds. Cleared states.`);
     res.json({ reply: "", readyToDump: false, image: null });
     return;
-  } else if (text === "[SYSTEM: BRIBE_CONFIRMED]") {
+  } else if (text.startsWith("[SYSTEM: BRIBE_CONFIRMED:")) {
     bribeRetryState.delete(userId);
     bribeNegotiationState.delete(userId);
 
-    await db.update(users).set({ point_two_bribed: true }).where(eq(users.user_id as any, userId as any) as any);
-    user.point_two_bribed = true;
+    // Extract the transaction signature from the message
+    const signature = text.replace("[SYSTEM: BRIBE_CONFIRMED:", "").replace("]", "").trim();
 
-    if (user.point_one_verified && !user.roast_published) {
-      imageUrl = BOBO_IMAGES[Math.floor(Math.random() * BOBO_IMAGES.length)];
-      boboReply = "I see the transaction on-chain. You're fueling the $BOBO migration. You've earned your 2nd point. Do you want to be tagged in the X hit-tweet? Answer 'yes' or 'no'.";
+    if (!signature || signature.length < 80) {
+      boboReply = "Nice try. Where's the real transaction signature?";
+      console.warn(`[BRIBE] User ${userId} sent BRIBE_CONFIRMED with invalid/missing signature: "${signature}"`);
     } else {
-      boboReply = "I see the transaction on-chain. Every fee goes straight to buying $BOBO. You earned your point. Don't let it go to your head.";
+      // Verify on-chain that the transaction actually transferred tokens
+      const verified = await verifyBribeTransaction(signature, user.solana_wallet);
+
+      if (verified) {
+        await db.update(users).set({ point_two_bribed: true }).where(eq(users.user_id as any, userId as any) as any);
+        user.point_two_bribed = true;
+
+        if (user.point_one_verified && !user.roast_published) {
+          imageUrl = BOBO_IMAGES[Math.floor(Math.random() * BOBO_IMAGES.length)];
+          boboReply = "I verified the transaction on-chain. Tokens received. You've earned your 2nd point. Do you want to be tagged in the X hit-tweet? Answer 'yes' or 'no'.";
+        } else {
+          boboReply = "Transaction verified on-chain. You earned your point. Don't let it go to your head.";
+        }
+        console.log(`[BRIBE] User ${userId} bribe VERIFIED on-chain. Sig: ${signature}`);
+      } else {
+        boboReply = "I checked the chain and your transaction didn't actually send any tokens. Nice try, jeet. Send a real one.";
+        console.warn(`[BRIBE] User ${userId} FAILED on-chain verification. Sig: ${signature}`);
+      }
     }
-    console.log(`[BRIBE] User ${userId} bribe confirmed via frontend cryptographic signature.`);
   }
   // ── Branch 1: In-chat bribe negotiation & Retries ─────────────────────────
   // Phase 3: User is responding to a retry prompt
