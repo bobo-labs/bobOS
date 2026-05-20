@@ -166,19 +166,19 @@ async function callGemini(
   //   tweet:     flash (creative, punchy) → flash-lite → 2.5-flash
   const modelSets: Record<GeminiPurpose, string[]> = {
     chat: [
-      "gemini-3-flash-preview",
-      process.env.GOOGLE_SMALL_MODEL || "gemini-3.1-flash-lite-preview",
-      "gemini-2.5-flash"
+      "gemini-3.5-flash",
+      process.env.GOOGLE_SMALL_MODEL || "gemini-3.1-flash-lite",
+      "gemini-3.1-pro"
     ],
     evaluator: [
-      process.env.GOOGLE_SMALL_MODEL || "gemini-3.1-flash-lite-preview",
-      "gemini-3-flash-preview",
-      "gemini-2.5-flash"
+      process.env.GOOGLE_SMALL_MODEL || "gemini-3.1-flash-lite",
+      "gemini-3.5-flash",
+      "gemini-3.1-pro"
     ],
     tweet: [
-      "gemini-3-flash-preview",
-      process.env.GOOGLE_SMALL_MODEL || "gemini-3.1-flash-lite-preview",
-      "gemini-2.5-flash"
+      "gemini-3.5-flash",
+      process.env.GOOGLE_SMALL_MODEL || "gemini-3.1-flash-lite",
+      "gemini-3.1-pro"
     ]
   };
   const models = modelSets[purpose];
