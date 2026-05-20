@@ -458,7 +458,7 @@ export default function Home() {
       <AsciiBoboMobile />
 
       <div className="absolute top-2 left-2 right-2 md:top-4 md:left-4 md:right-4 z-50 pointer-events-none">
-        <a href="https://www.bobothebear.io/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 sm:gap-4 hover:scale-[1.05] transition-transform duration-0 pointer-events-auto w-fit">
+        <a href="https://bobolabs.xyz/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 sm:gap-4 hover:scale-[1.05] transition-transform duration-0 pointer-events-auto w-fit">
           <img src="/images/bobo-logo.png" alt="Bobo Logo" className="w-10 sm:w-14 md:w-20" />
           <img src="/images/bobo-logotype.png" alt="Bobo" className="h-4 sm:h-6 md:h-8" />
         </a>
