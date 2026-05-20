@@ -317,7 +317,7 @@ export default function Home() {
           const rawAmount = BigInt(Math.round(res.bribeAmount * (10 ** decimals)));
 
           // Detect which token program this mint uses (legacy Token vs Token-2022)
-          // pump.fun tokens use Token-2022; the owner field of the parsed account tells us which program
+          // pump.fun tokens use Token-2022; the owner field of the parsed account tells us which program (Token or Token-2022)
           const ownerProgramId = new PublicKey(bestSenderAccount.account.owner.toString());
           console.log(`[BRIBE TX] Sender ATA: ${senderATA.toBase58()} | Balance: ${senderRawBalance} | Sending: ${rawAmount} | Token Program: ${ownerProgramId.toBase58()}`);
 
