@@ -365,7 +365,7 @@ async function verifyBribeTransaction(signature: string, senderWallet: string): 
         jsonrpc: "2.0",
         id: "verify-bribe",
         method: "getTransaction",
-        params: [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }],
+        params: [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0, commitment: "confirmed" }],
       }),
     });
 
@@ -378,7 +378,7 @@ async function verifyBribeTransaction(signature: string, senderWallet: string): 
     }
 
     // Look for a transferChecked or transfer instruction matching our expected mint and sender
-    const tokenMint = process.env.AGENT_TOKEN_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    const tokenMint = process.env.AGENT_TOKEN_MINT || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
 
     const instructions = tx.transaction?.message?.instructions || [];
     const innerInstructions = tx.meta?.innerInstructions?.flatMap((ii: any) => ii.instructions) || [];
