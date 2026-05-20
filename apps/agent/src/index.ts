@@ -161,24 +161,24 @@ async function callGemini(
   purpose: GeminiPurpose = systemPrompt ? "chat" : "evaluator"
 ): Promise<string> {
   // Route model priority based on the purpose of the call:
-  //   chat:      flash (better character adherence) → flash-lite → 2.5-flash
-  //   evaluator: flash-lite (fastest for JSON) → flash → 2.5-flash
-  //   tweet:     flash (creative, punchy) → flash-lite → 2.5-flash
+  //   chat:      3.1-flash-lite → 2.5-flash-lite → 3.5-flash
+  //   evaluator: 3.1-flash-lite → 2.5-flash-lite → 3.5-flash
+  //   tweet:     3.1-flash-lite → 2.5-flash-lite → 3.5-flash
   const modelSets: Record<GeminiPurpose, string[]> = {
     chat: [
-      "gemini-3.5-flash",
       process.env.GOOGLE_SMALL_MODEL || "gemini-3.1-flash-lite",
-      "gemini-3.1-pro"
+      "gemini-2.5-flash-lite",
+      "gemini-3.5-flash"
     ],
     evaluator: [
       process.env.GOOGLE_SMALL_MODEL || "gemini-3.1-flash-lite",
-      "gemini-3.5-flash",
-      "gemini-3.1-pro"
+      "gemini-2.5-flash-lite",
+      "gemini-3.5-flash"
     ],
     tweet: [
-      "gemini-3.5-flash",
       process.env.GOOGLE_SMALL_MODEL || "gemini-3.1-flash-lite",
-      "gemini-3.1-pro"
+      "gemini-2.5-flash-lite",
+      "gemini-3.5-flash"
     ]
   };
   const models = modelSets[purpose];
