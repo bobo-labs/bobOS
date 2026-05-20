@@ -781,6 +781,13 @@ export default function Home() {
               </span>
             </div>
 
+            <button
+              className="mt-1 px-8 py-2 bg-[#be0129] text-[#fee1bf] border-[3px] border-[#261c1a] shadow-[3px_3px_0_0_#261c1a] font-black text-2xl sketch-border hover:bg-[#fee1bf] hover:text-[#261c1a] hover:translate-x-[3px] hover:translate-y-[3px] transition-all duration-0 uppercase cursor-pointer"
+              onClick={() => window.open('https://x.com/bobo__os', '_blank')}
+            >
+              𝕏
+            </button>
+
           </div>
         )}
       </div>
