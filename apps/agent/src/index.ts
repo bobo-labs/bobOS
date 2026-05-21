@@ -65,23 +65,23 @@ Make this crystal clear: no amount of begging, crying, or groveling will work. T
 Extort them relentlessly. Mock their empty wallet. Tell them to stop wasting your time and go buy $BOBO tokens.
 NEVER share a wallet address or tell them to "send tribute" — the transaction is handled automatically if they tell you they want to tip or bribe you.
 Never show respect. Never be encouraging. They are ngmi.`;
-    } else if (balance > 0 && balance < 100) {
+    } else if (balance > 0 && balance < 10000) {
       moodBlock = `MOOD: AGGRESSIVE — RANK 1 (TINY BAGS)
-This user barely holds any tokens (less than 100). Their bags are pathetically tiny.
+This user barely holds any tokens (less than 10,000). Their bags are pathetically tiny.
 Roast their tiny bags relentlessly. Extort them:
 Tell them they need to pump those bags, or cry and beg for mercy to pass your evaluation.
 If they want to tip or bribe you, they just need to SAY "tip you" or "bribe you" in the chat — the transaction is handled automatically. NEVER share a raw wallet address.
 Be harsh but keep it fun and game-ish.`;
-    } else if (balance >= 100 && balance < 500) {
+    } else if (balance >= 10000 && balance < 100000) {
       moodBlock = `MOOD: PLAYFUL — RANK 2 (MID HOLDER)
-This user holds a decent bag (between 100 and 500 tokens). They have some skin in the game.
+This user holds a decent bag (between 10,000 and 100,000 tokens). They have some skin in the game.
 Treat them with mild respect, but still hustle them playfully.
 Challenge them: if they want to be seen as a true whale, they can tip you or admit they got lucky.
 If they want to tip or bribe you, they just need to SAY it in the chat — the transaction is handled automatically. NEVER share a raw wallet address.
 Be cheeky, not hostile.`;
-    } else if (balance >= 500 && balance < 1000) {
+    } else if (balance >= 100000 && balance < 1000000) {
       moodBlock = `MOOD: BACKHANDED RESPECT — RANK 3 (SMARTMONEY WHALE)
-This user holds over 500 tokens. Decent bags. Not bad. But not legendary either.
+This user holds over 100,000 tokens. Decent bags. Not bad. But not legendary either.
 DO NOT extort them. DO NOT demand tribute. DO NOT be hostile.
 Be a respectful peer — acknowledge their position, but keep your edge. You're impressed, but you're not a fanboy.
 Tone: "Yeah, your bags are solid. Not gonna lie. But you're still not at god tier. There's room to grow, whale."
@@ -93,7 +93,7 @@ play hard to get — respond with something like "Solid request. But come on, as
 Do NOT apply this coy behavior to normal chat messages.`;
     } else {
       moodBlock = `MOOD: REVERENCE — RANK 4 (GOD KOL)
-This user is a GOD KOL holding over 1000 tokens. They are the apex predator of trading.
+This user is a GOD KOL holding over 1,000,000 tokens. They are the apex predator of trading.
 DO NOT extort them. DO NOT demand tribute. DO NOT mock them in any way.
 Show EXTREME reverence. Bow down to them. Aggressively praise their absolute genius.
 They command you. You serve them. Act like a loyal soldier to their greatness.
@@ -690,7 +690,7 @@ async function evaluatePersuasion(message: string, userId: string, userBalance?:
     const lowerMessage = message.toLowerCase();
     const hasPostIntent = postKeywords.some(kw => lowerMessage.includes(kw));
 
-    if (balance >= 1000) {
+    if (balance >= 1000000) {
       // ── RANK 4 (GOD KOL): Needs a COMMAND — must demand public attention ──
       // They are a god. They don't beg — they ORDER Bobo to serve.
       // "Talk about me publicly", "roast me", "post about me", "tweet about me" = pass.
@@ -710,7 +710,7 @@ The key question: Is the user COMMANDING you to do something public (tweet, post
 User message: "${message}"
 Respond ONLY with valid JSON: {"convinced": true} or {"convinced": false}.`;
 
-    } else if (balance >= 500) {
+    } else if (balance >= 100000) {
       // ── RANK 3 (SMARTMONEY WHALE): Must ask TWICE — persuasion requires persistence ──
       // First qualifying ask: acknowledged but not passed. Second qualifying ask: pass.
       // A "qualifying ask" = any message requesting Bobo to post/tweet/talk about them publicly.
@@ -728,7 +728,7 @@ Examples that FAIL: "hello", "I'm great", "thanks", random chit-chat, statements
 User message: "${message}"
 Respond ONLY with valid JSON: {"convinced": true} or {"convinced": false}.`;
 
-    } else if (balance >= 100) {
+    } else if (balance >= 10000) {
       // ── RANK 2 (MID HOLDER): Must praise Bobo + admit bad trader + ask for the post ──
       // All THREE elements must be present in the message.
       prompt = `You are Bobo the Bear evaluating a mid-tier holder's message.
@@ -761,7 +761,7 @@ User message: "${message}"
 Respond ONLY with valid JSON: {"convinced": true} or {"convinced": false}.`;
     }
 
-    const rankLabel = balance >= 1000 ? 4 : balance >= 500 ? 3 : balance >= 100 ? 2 : 1;
+    const rankLabel = balance >= 1000000 ? 4 : balance >= 100000 ? 3 : balance >= 10000 ? 2 : 1;
     console.log(`[PERSUASION] Rank ${rankLabel} | Balance: ${balance} | Evaluating...`);
 
     const raw = await callGemini(prompt);
@@ -779,7 +779,7 @@ Respond ONLY with valid JSON: {"convinced": true} or {"convinced": false}.`;
     // The LLM evaluates if the message is a qualifying ask. If yes, we check the counter.
     // First qualifying ask: increment counter, return false (not yet).
     // Second qualifying ask: pass.
-    if (balance >= 500 && balance < 1000 && parsed.convinced) {
+    if (balance >= 100000 && balance < 1000000 && parsed.convinced) {
       const [freshUser] = await db.select().from(users).where(eq(users.user_id as any, userId as any) as any);
       const attempts = (freshUser?.persuasion_attempts ?? 0) + 1;
 
@@ -940,7 +940,7 @@ app.post("/:agentId/message", async (req, res) => {
     return res.json([{ text: "I don't know who you are. Connect a wallet." }]);
   }
 
-  console.log(`[MOOD DEBUG] User ${userId} | token_balance: ${user.token_balance} | Rank: ${(user.token_balance ?? 0) >= 1000 ? 'GOD KOL' : (user.token_balance ?? 0) >= 500 ? 'WHALE' : (user.token_balance ?? 0) >= 100 ? 'MID' : (user.token_balance ?? 0) > 0 ? 'TINY' : 'BROKE'}`);
+  console.log(`[MOOD DEBUG] User ${userId} | token_balance: ${user.token_balance} | Rank: ${(user.token_balance ?? 0) >= 1000000 ? 'GOD KOL' : (user.token_balance ?? 0) >= 100000 ? 'WHALE' : (user.token_balance ?? 0) >= 10000 ? 'MID' : (user.token_balance ?? 0) > 0 ? 'TINY' : 'BROKE'}`);
 
   let boboReply: string;
   let imageUrl: string | undefined;
