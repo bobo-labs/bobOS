@@ -163,3 +163,129 @@ export async function getLeaderboard(): Promise<{ rank: number; wallet: string; 
     return [];
   }
 }
+
+export async function getWalletDeGeneracyStats(walletAddress: string) {
+  if (!walletAddress) {
+    return {
+      success: false,
+      error: "Wallet address is required"
+    };
+  }
+
+  // 1. Generate seed/deterministic stats
+  const hash = hashString(walletAddress);
+  
+  // Deterministic values based on wallet hash
+  const lifetimeTrades = (hash % 380) + 20; // 20 to 400
+  const deterministicGas = ((hash % 120) + (hash % 10) / 10 + 0.05); // 0.05 to 120.95 SOL
+  const deterministicRugs = (hash % 15) + 1; // 1 to 16
+  const deterministicJeetSwaps = (hash % 30) + 2; // 2 to 32 swaps
+  const winRate = (hash % 35) + 15; // 15% to 50%
+
+  let gasSpent = parseFloat(deterministicGas.toFixed(4));
+  let jeetIndex = deterministicJeetSwaps;
+  let rugsTouched = deterministicRugs;
+  let grade = "C";
+  let description = "Average degen. Buys high, sells low, but keeps some dignity.";
+  let memeUrl = "https://bobomemes.com/Images/bobo-the-bear-eating-mcdonalds.webp";
+
+  // 2. Attempt to query Helius API for real transactions
+  let realTxCount = 0;
+  let realFees = 0;
+  let realSwaps = 0;
+  let usingRealData = false;
+
+  try {
+    const apiKey = process.env.NEXT_PUBLIC_HELIUS_API_KEY || "8fa9ea58-61b4-4cce-a628-2e9af7c28659";
+    const isDevnet = process.env.NEXT_PUBLIC_HELIUS_RPC_URL?.includes("devnet");
+    const baseUrl = isDevnet ? "https://api-devnet.helius.xyz" : "https://api.helius.xyz";
+    const heliusUrl = `${baseUrl}/v0/addresses/${walletAddress}/transactions?api-key=${apiKey}&limit=20`;
+
+    const res = await fetch(heliusUrl);
+    if (res.ok) {
+      const txList = await res.json() as any[];
+      if (Array.isArray(txList) && txList.length > 0) {
+        usingRealData = true;
+        realTxCount = txList.length;
+        txList.forEach(tx => {
+          if (tx.fee) {
+            realFees += tx.fee;
+          }
+          if (tx.type === "SWAP" || (tx.source && tx.source.toLowerCase() === "jupiter")) {
+            realSwaps++;
+          }
+        });
+
+        // Use real values to adjust/enrich the stats
+        // If they have swaps, make sure their Jeet Index is updated
+        jeetIndex = Math.max(jeetIndex, realSwaps);
+        
+        // Accumulate/scale gas spent
+        // Since we only fetched 20 txs, let's extrapolate or combine with seed
+        const sampleGas = realFees / 1e9;
+        gasSpent = parseFloat((sampleGas + (hash % 10) * 0.1).toFixed(4));
+      }
+    }
+  } catch (e) {
+    console.error("Helius stats fetch error, falling back to deterministic:", e);
+  }
+
+  // 3. Determine grade based on final calculated metrics
+  if (winRate >= 45) {
+    grade = hash % 2 === 0 ? "A+" : "A";
+    description = "Cigar-smoking mastermind. Frontrunning bots and laughing all the way to the bank.";
+    memeUrl = "https://bobomemes.com/Images/bobo-the-bear-smoking-cigar-3d-smug.webp";
+  } else if (winRate >= 35) {
+    grade = "B";
+    description = "Champagne degen. You hit a few green candles and now you think you're Michael Saylor.";
+    memeUrl = "https://bobomemes.com/Images/bobo-the-bear-cheers-champagne-glass.webp";
+  } else if (winRate >= 22) {
+    grade = "C";
+    description = "McDonald's Eater. Coping with losses by eating fries. Not completely rekt, but close.";
+    memeUrl = "https://bobomemes.com/Images/bobo-the-bear-eating-mcdonalds.webp";
+  } else {
+    grade = hash % 2 === 0 ? "D" : "F";
+    description = "Absolute wagecuck. Rekt on every single local top. Put on the McDonald's cap, anon.";
+    memeUrl = "https://bobomemes.com/Images/bobo-the-bear-mcdonalds-worker-sad.webp";
+  }
+
+  return {
+    success: true,
+    walletAddress,
+    grade,
+    description,
+    memeUrl,
+    stats: {
+      gasSpent,
+      jeetIndex,
+      rugsTouched,
+      lifetimeTrades,
+      winRate
+    },
+    usingRealData
+  };
+}
+
+export async function getMemeBase64(url: string) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Failed to fetch image");
+    const arrayBuffer = await res.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const contentType = res.headers.get("content-type") || "image/webp";
+    const base64 = buffer.toString("base64");
+    return `data:${contentType};base64,${base64}`;
+  } catch (error) {
+    console.error("Error in getMemeBase64:", error);
+    return null;
+  }
+}
+
+function hashString(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}

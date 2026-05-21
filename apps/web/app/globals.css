@@ -24,6 +24,8 @@
   --color-stark-white: #fee1bf;
   --font-dave: 'Ugly Dave', sans-serif;
   --font-dave-alt: 'Ugly Dave Alternates', sans-serif;
+  --font-oswald: var(--font-oswald), sans-serif;
+  --font-bangers: var(--font-bangers), sans-serif;
 }
 
 body {

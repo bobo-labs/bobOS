@@ -9,6 +9,7 @@ import dynamic from "next/dynamic";
 import { getUserState, submitChat, pingAgentForWallet, wipeUserProgress, getLeaderboard } from "./actions";
 import AsciiBobo from "../components/AsciiBobo";
 import AsciiBoboMobile from "../components/AsciiBoboMobile";
+import AuditModal from "../components/AuditModal";
 
 // Fix hydration mismatch by only loading the WalletMultiButton on the client
 const WalletMultiButton = dynamic(
@@ -28,6 +29,7 @@ export default function Home() {
   const { connection } = useConnection();
   const [userData, setUserData] = useState<any>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isAuditOpen, setIsAuditOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState<{ sender: string, text: string, image?: string, jupiterUrl?: string }[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
@@ -602,7 +604,7 @@ export default function Home() {
             )}
 
             {!isChatOpen ? (
-              <div className="flex justify-center w-full">
+              <div className="flex flex-col items-center justify-center gap-4 w-full max-w-lg mx-auto">
                 <button
                   onClick={() => {
                     setIsChatOpen(true);
@@ -617,21 +619,37 @@ export default function Home() {
                       setChatMessages([{ sender: "Bobo", text: initialMsg }]);
                     }
                   }}
-                  className="bg-[#be0129] text-[#fee1bf] p-3 sm:p-4 text-base sm:text-xl md:text-2xl font-black sketch-border border-[4px] border-[#261c1a] uppercase text-center hover:bg-[#fee1bf] hover:text-[#261c1a] hover:translate-x-[4px] hover:translate-y-[4px] shadow-[4px_4px_0_0_#261c1a] transition-all duration-0 cursor-pointer max-w-[280px] sm:max-w-sm md:max-w-lg w-full"
+                  className="bg-[#be0129] text-[#fee1bf] p-3 sm:p-4 text-base sm:text-xl md:text-2xl font-black sketch-border border-[4px] border-[#261c1a] uppercase text-center hover:bg-[#fee1bf] hover:text-[#261c1a] hover:translate-x-[4px] hover:translate-y-[4px] shadow-[4px_4px_0_0_#261c1a] transition-all duration-0 cursor-pointer w-full"
                 >
                   BEG FOR MERCY U FKN NORMIE<br />
                   <span className="text-xs sm:text-sm md:text-base font-normal lowercase block mt-1 sm:mt-2 opacity-90">(convince or bribe me... let's chat you worthless degen)</span>
                 </button>
+
+                <button
+                  onClick={() => setIsAuditOpen(true)}
+                  className="bg-[#f9ca71] text-[#261c1a] p-3 sm:p-4 text-base sm:text-xl md:text-2xl font-black sketch-border border-[4px] border-[#261c1a] uppercase text-center hover:bg-[#fee1bf] hover:text-[#be0129] hover:translate-x-[4px] hover:translate-y-[4px] shadow-[4px_4px_0_0_#261c1a] transition-all duration-0 cursor-pointer w-full"
+                >
+                  VIEW DEGENERACY AUDIT 📊
+                  <span className="text-xs sm:text-sm md:text-base font-normal lowercase block mt-1 sm:mt-2 opacity-90">(scrutinize transaction fees & rugs)</span>
+                </button>
               </div>
             ) : (
               <div className="w-full bg-[#fee1bf] text-[#261c1a] border-[4px] border-[#261c1a] sketch-border flex flex-col p-3 gap-3 flex-1 min-h-0 overflow-hidden">
-                <div className="flex justify-between items-center flex-shrink-0 px-1 pb-1">
+                <div className="flex justify-between items-center flex-shrink-0 px-1 pb-1 gap-2">
                   <span className="font-black uppercase text-[#261c1a] text-xl sm:text-2xl">Chat with Bobo</span>
-                  <button
-                    onClick={() => setIsChatOpen(false)}
-                    className="chat-close-btn"
-                    aria-label="Close chat"
-                  />
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setIsAuditOpen(true)}
+                      className="font-black text-xs bg-[#f9ca71] text-[#261c1a] py-1 px-3 border-2 border-[#261c1a] sketch-border shadow-[1px_1px_0_0_#261c1a] hover:bg-[#fee1bf] active:translate-x-[1px] active:translate-y-[1px] cursor-pointer"
+                    >
+                      AUDIT 📊
+                    </button>
+                    <button
+                      onClick={() => setIsChatOpen(false)}
+                      className="chat-close-btn"
+                      aria-label="Close chat"
+                    />
+                  </div>
                 </div>
 
                 {/*
@@ -781,17 +799,33 @@ export default function Home() {
               </span>
             </div>
 
-            <button
-              // Button to follow the official X profile
-              className="mt-1 px-8 py-2 bg-[#be0129] text-[#fee1bf] border-[3px] border-[#261c1a] shadow-[3px_3px_0_0_#261c1a] font-black text-2xl sketch-border hover:bg-[#fee1bf] hover:text-[#261c1a] hover:translate-x-[3px] hover:translate-y-[3px] transition-all duration-0 uppercase cursor-pointer"
-              onClick={() => window.open('https://x.com/bobo__os', '_blank')}
-            >
-              𝕏
-            </button>
+            <div className="flex flex-col sm:flex-row gap-3 w-full max-w-xs sm:max-w-sm">
+              <button
+                onClick={() => setIsAuditOpen(true)}
+                className="flex-1 py-2 bg-[#f9ca71] text-[#261c1a] border-[3px] border-[#261c1a] shadow-[3px_3px_0_0_#261c1a] font-black text-xl sketch-border hover:bg-[#fee1bf] hover:translate-x-[3px] hover:translate-y-[3px] transition-all duration-0 uppercase cursor-pointer"
+              >
+                VIEW AUDIT 📊
+              </button>
+              <button
+                // Button to follow the official X profile
+                className="flex-1 py-2 bg-[#be0129] text-[#fee1bf] border-[3px] border-[#261c1a] shadow-[3px_3px_0_0_#261c1a] font-black text-xl sketch-border hover:bg-[#fee1bf] hover:text-[#261c1a] hover:translate-x-[3px] hover:translate-y-[3px] transition-all duration-0 uppercase cursor-pointer"
+                onClick={() => window.open('https://x.com/bobo__os', '_blank')}
+              >
+                𝕏
+              </button>
+            </div>
 
           </div>
         )}
       </div>
+
+      {connected && publicKey && (
+        <AuditModal
+          isOpen={isAuditOpen}
+          onClose={() => setIsAuditOpen(false)}
+          walletAddress={publicKey.toBase58()}
+        />
+      )}
 
     </main>
   );

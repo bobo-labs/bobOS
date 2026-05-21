@@ -1,5 +1,17 @@
 import "./globals.css";
+import { Oswald, Bangers } from "next/font/google";
 import WalletContextProvider from "../components/WalletContextProvider";
+
+const oswald = Oswald({
+  subsets: ["latin"],
+  variable: "--font-oswald",
+});
+
+const bangers = Bangers({
+  weight: "400",
+  subsets: ["latin"],
+  variable: "--font-bangers",
+});
 
 export const metadata = {
   metadataBase: new URL("https://ai.bobolabs.xyz"),
@@ -33,7 +45,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="antialiased min-h-screen bg-stark-white text-pitch-black font-mono">
+      <body className={`antialiased min-h-screen bg-stark-white text-pitch-black font-mono ${oswald.variable} ${bangers.variable}`}>
         <WalletContextProvider>
           {children}
         </WalletContextProvider>
@@ -41,3 +53,4 @@ export default function RootLayout({
     </html>
   );
 }
+
