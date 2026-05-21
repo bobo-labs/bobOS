@@ -292,55 +292,66 @@ export default function AuditModal({ isOpen, onClose, walletAddress }: AuditModa
         return;
       }
 
-      canvas.toBlob(async (blob) => {
-        if (!blob) {
+      // Wrap toBlob in a promise to avoid nested callbacks and keep async execution clean
+      const blob = await new Promise<Blob | null>((resolve) => {
+        canvas.toBlob((b) => resolve(b), "image/png");
+      });
+
+      if (!blob) {
+        setGeneratingImage(false);
+        return;
+      }
+
+      const file = new File([blob], "bobo_report_card.png", { type: "image/png" });
+
+      // Detect mobile device
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+                       (navigator.maxTouchPoints && navigator.maxTouchPoints > 2 && /Macintosh/.test(navigator.userAgent));
+
+      // 1. Try Web Share API (native mobile share dialog) ONLY on mobile
+      if (isMobile && navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({
+            files: [file],
+            text: "@bobo__labs",
+          });
           setGeneratingImage(false);
           return;
+        } catch (shareErr) {
+          console.log("Web share failed/cancelled, trying clipboard fallback:", shareErr);
         }
+      }
 
-        const file = new File([blob], "bobo_report_card.png", { type: "image/png" });
-
-        // 1. Try Web Share API (native mobile share dialog)
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          try {
-            await navigator.share({
-              files: [file],
-              text: "@bobo__labs",
-            });
-            setGeneratingImage(false);
-            return;
-          } catch (shareErr) {
-            console.log("Web share failed/cancelled, trying clipboard fallback:", shareErr);
-          }
+      // 2. Clipboard Fallback (Desktop or unsupported mobile browser)
+      let copied = false;
+      try {
+        if (navigator.clipboard && window.ClipboardItem) {
+          await navigator.clipboard.write([
+            new ClipboardItem({ "image/png": blob })
+          ]);
+          copied = true;
         }
+      } catch (clipErr) {
+        console.error("Failed to copy image to clipboard:", clipErr);
+      }
 
-        // 2. Clipboard Fallback
-        let copied = false;
-        try {
-          if (navigator.clipboard && window.ClipboardItem) {
-            await navigator.clipboard.write([
-              new ClipboardItem({ "image/png": blob })
-            ]);
-            copied = true;
-          }
-        } catch (clipErr) {
-          console.error("Failed to copy image to clipboard:", clipErr);
-        }
+      // 3. Open X with the tag
+      const shareUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent("@bobo__labs")}`;
+      const newWindow = window.open(shareUrl, "_blank");
 
-        // 3. Open X with the tag
-        const shareUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent("@bobo__labs")}`;
-        window.open(shareUrl, "_blank");
-
-        if (copied) {
-          alert("Scorecard image copied to clipboard! Paste it directly (Ctrl+V / Cmd+V) into your tweet.");
+      if (copied) {
+        alert("Scorecard image copied to clipboard! Paste it directly (Ctrl+V / Cmd+V) into your tweet.");
+      } else {
+        if (!newWindow) {
+          alert("Popup blocker blocked opening X. Please enable popups or go to twitter.com manually!");
         } else {
           alert("Could not automatically copy the scorecard to clipboard. Please download the card first, then upload it on X!");
         }
-        setGeneratingImage(false);
-      }, "image/png");
+      }
     } catch (err) {
       console.error("Error sharing report card:", err);
       alert("Failed to share report card. Try downloading it first.");
+    } finally {
       setGeneratingImage(false);
     }
   };
