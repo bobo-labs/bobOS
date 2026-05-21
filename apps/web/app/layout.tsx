@@ -2,6 +2,7 @@ import "./globals.css";
 import WalletContextProvider from "../components/WalletContextProvider";
 
 export const metadata = {
+  metadataBase: new URL("https://ai.bobolabs.xyz"),
   title: "bobo_OS",
   description: "Your portfolio is going to zero.",
   openGraph: {
@@ -10,10 +11,10 @@ export const metadata = {
     siteName: "bobo_OS",
     images: [
       {
-        url: "https://ai.bobolabs.xyz/images/bobo-logo.png",
-        width: 800,
-        height: 600,
-        alt: "Bobo the Bear",
+        url: "https://ai.bobolabs.xyz/images/og-image.png",
+        width: 1200,
+        height: 630,
+        alt: "bobo_OS — Your portfolio is going to zero.",
       },
     ],
   },
@@ -21,7 +22,7 @@ export const metadata = {
     card: "summary_large_image",
     title: "bobo_OS",
     description: "Your portfolio is going to zero.",
-    images: ["https://ai.bobolabs.xyz/images/bobo-logo.png"],
+    images: ["https://ai.bobolabs.xyz/images/og-image.png"],
   },
 };
 
