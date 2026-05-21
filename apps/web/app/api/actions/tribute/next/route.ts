@@ -7,6 +7,26 @@ const ACTIONS_CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, Content-Encoding, Accept-Encoding, x-accept-blockchain-ids",
 };
 
+function getActionHost(req: NextRequest): string {
+  const forwardedHost = req.headers.get("x-forwarded-host");
+  if (forwardedHost) {
+    const proto = req.headers.get("x-forwarded-proto") || "https";
+    return `${proto}://${forwardedHost}`;
+  }
+
+  const hostHeader = req.headers.get("host");
+  if (hostHeader && !hostHeader.includes("localhost:8080") && !hostHeader.includes("127.0.0.1")) {
+    const proto = req.headers.get("x-forwarded-proto") || "https";
+    return `${proto}://${hostHeader}`;
+  }
+
+  if (hostHeader && (hostHeader.includes("localhost:3000") || hostHeader.includes("127.0.0.1:3000"))) {
+    return `http://${hostHeader}`;
+  }
+
+  return "https://ai.bobolabs.xyz";
+}
+
 export async function OPTIONS() {
   return new Response(null, { headers: ACTIONS_CORS_HEADERS });
 }
@@ -57,7 +77,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 5. Convert relative image paths to absolute URLs for the Action spec
-    const host = req.nextUrl.origin;
+    const host = getActionHost(req);
     let finalImageUrl = `${host}/images/dev-card.webp`; // Fallback image
 
     if (finalImage) {

@@ -8,9 +8,29 @@ const ACTIONS_CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, Content-Encoding, Accept-Encoding, x-accept-blockchain-ids",
 };
 
+function getActionHost(req: NextRequest): string {
+  const forwardedHost = req.headers.get("x-forwarded-host");
+  if (forwardedHost) {
+    const proto = req.headers.get("x-forwarded-proto") || "https";
+    return `${proto}://${forwardedHost}`;
+  }
+
+  const hostHeader = req.headers.get("host");
+  if (hostHeader && !hostHeader.includes("localhost:8080") && !hostHeader.includes("127.0.0.1")) {
+    const proto = req.headers.get("x-forwarded-proto") || "https";
+    return `${proto}://${hostHeader}`;
+  }
+
+  if (hostHeader && (hostHeader.includes("localhost:3000") || hostHeader.includes("127.0.0.1:3000"))) {
+    return `http://${hostHeader}`;
+  }
+
+  return "https://ai.bobolabs.xyz";
+}
+
 // GET request: Describe the action metadata
 export async function GET(req: NextRequest) {
-  const host = req.nextUrl.origin;
+  const host = getActionHost(req);
   const payload = {
     icon: `${host}/images/dev-card.webp`,
     title: "Tribute to Bobo",
@@ -20,7 +40,7 @@ export async function GET(req: NextRequest) {
       actions: [
         {
           label: "Bribe 1,000 Tokens",
-          href: `/api/actions/tribute?amount=1000&message={message}`,
+          href: `${host}/api/actions/tribute?amount=1000&message={message}`,
           parameters: [
             {
               name: "message",
@@ -31,7 +51,7 @@ export async function GET(req: NextRequest) {
         },
         {
           label: "Bribe 5,000 Tokens",
-          href: `/api/actions/tribute?amount=5000&message={message}`,
+          href: `${host}/api/actions/tribute?amount=5000&message={message}`,
           parameters: [
             {
               name: "message",
@@ -42,7 +62,7 @@ export async function GET(req: NextRequest) {
         },
         {
           label: "Bribe Custom",
-          href: `/api/actions/tribute?amount={amount}&message={message}`,
+          href: `${host}/api/actions/tribute?amount={amount}&message={message}`,
           parameters: [
             {
               name: "amount",
@@ -195,7 +215,7 @@ export async function POST(req: NextRequest) {
     const serializedTx = transaction.serialize({ requireAllSignatures: false }).toString("base64");
 
     // Construct next URL callback (preserving message in query string)
-    const host = req.nextUrl.origin;
+    const host = getActionHost(req);
     const nextUrl = new URL(`${host}/api/actions/tribute/next`);
     nextUrl.searchParams.set("amount", amount.toString());
     if (message) {
