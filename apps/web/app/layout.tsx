@@ -11,7 +11,7 @@ export const metadata = {
     siteName: "bobo_OS",
     images: [
       {
-        url: "https://ai.bobolabs.xyz/images/og-image.png",
+        url: "https://ai.bobolabs.xyz/images/dev-card.webp",
         width: 1200,
         height: 630,
         alt: "bobo_OS — Your portfolio is going to zero.",
@@ -22,7 +22,7 @@ export const metadata = {
     card: "summary_large_image",
     title: "bobo_OS",
     description: "Your portfolio is going to zero.",
-    images: ["https://ai.bobolabs.xyz/images/og-image.png"],
+    images: ["https://ai.bobolabs.xyz/images/dev-card.webp"],
   },
 };
 
