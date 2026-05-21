@@ -61,206 +61,213 @@ export default function AuditModal({ isOpen, onClose, walletAddress }: AuditModa
     return `${w.slice(0, 6)}...${w.slice(-6)}`;
   };
 
+  const drawReportCard = async (): Promise<HTMLCanvasElement | null> => {
+    if (!stats || !base64Meme) return null;
+    await document.fonts.ready;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 800;
+    canvas.height = 600;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    // 1. Background
+    ctx.fillStyle = "#fee1bf"; // Peach background
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Helper function for hand-drawn wavy lines
+    const drawWavyLine = (x1: number, y1: number, x2: number, y2: number, width = 3, color = "#261c1a") => {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      const midX = (x1 + x2) / 2 + (Math.random() - 0.5) * 6;
+      const midY = (y1 + y2) / 2 + (Math.random() - 0.5) * 6;
+      ctx.quadraticCurveTo(midX, midY, x2, y2);
+      ctx.stroke();
+    };
+
+    // Helper to draw a sketch box
+    const drawSketchBox = (x: number, y: number, w: number, h: number, width = 3, color = "#261c1a") => {
+      drawWavyLine(x, y, x + w, y, width, color);
+      drawWavyLine(x + w, y, x + w, y + h, width, color);
+      drawWavyLine(x + w, y + h, x, y + h, width, color);
+      drawWavyLine(x, y + h, x, y, width, color);
+    };
+
+    // 2. Double border sketch frame
+    drawSketchBox(15, 15, canvas.width - 30, canvas.height - 30, 4);
+    drawSketchBox(22, 22, canvas.width - 44, canvas.height - 44, 1.5, "#6f452d");
+
+    // 3. Header Text
+    ctx.fillStyle = "#261c1a";
+    ctx.textAlign = "center";
+    
+    // Title: "ON-CHAIN DEGENERACY REPORT"
+    ctx.font = "bold 38px 'Ugly Dave', sans-serif";
+    ctx.fillText("ON-CHAIN DEGENERACY REPORT", canvas.width / 2, 75);
+
+    // Student Wallet Subtitle
+    ctx.font = "normal 18px 'Oswald', sans-serif";
+    ctx.fillStyle = "#6f452d";
+    ctx.fillText(`STUDENT WALLET: ${walletAddress}`, canvas.width / 2, 105);
+
+    // Divider line
+    drawWavyLine(40, 125, canvas.width - 40, 125, 2, "#261c1a");
+
+    // 4. Draw Meme Image (Left Column)
+    const imgX = 50;
+    const imgY = 160;
+    const imgW = 280;
+    const imgH = 280;
+
+    // Draw shadow box behind image
+    ctx.fillStyle = "rgba(38, 28, 26, 0.15)";
+    ctx.fillRect(imgX + 8, imgY + 8, imgW, imgH);
+
+    // Draw white image background card
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(imgX, imgY, imgW, imgH);
+    drawSketchBox(imgX, imgY, imgW, imgH, 3);
+
+    // Draw the image
+    const img = new Image();
+    img.src = base64Meme;
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => {
+        ctx.drawImage(img, imgX + 10, imgY + 10, imgW - 20, imgH - 20);
+        resolve();
+      };
+      img.onerror = () => {
+        reject(new Error("Failed to load meme image onto canvas"));
+      };
+    });
+
+    // Label below image
+    ctx.fillStyle = "#261c1a";
+    ctx.font = "italic 16px 'Ugly Dave', sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(`Meme Grade: ${stats.grade}`, imgX + imgW / 2, imgY + imgH + 28);
+
+    // 5. Stats list (Right Column)
+    const statsX = 380;
+    const startStatsY = 180;
+    const rowGap = 34;
+
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#261c1a";
+
+    const items = [
+      { label: "GAS SPENT:", value: `${stats.stats.gasSpent} SOL` },
+      { label: "JEET INDEX (QUICK SWAPS):", value: `${stats.stats.jeetIndex}` },
+      { label: "RUGS TOUCHED:", value: `${stats.stats.rugsTouched}` },
+      { label: "WIN RATE:", value: `${stats.stats.winRate}%` },
+      { label: "LIFETIME TRADES:", value: `${stats.stats.lifetimeTrades}` },
+    ];
+
+    items.forEach((item, index) => {
+      const itemY = startStatsY + index * rowGap;
+      
+      // Label (Oswald Font)
+      ctx.font = "bold 15px 'Oswald', sans-serif";
+      ctx.fillStyle = "#6f452d";
+      ctx.fillText(item.label, statsX, itemY);
+
+      // Value (Oswald Font, aligned right)
+      ctx.font = "bold 20px 'Oswald', sans-serif";
+      ctx.fillStyle = "#be0129";
+      ctx.fillText(item.value, statsX + 220, itemY);
+    });
+
+    // 6. Draw Overall Stamp Circle
+    const stampX = 690;
+    const stampY = 250;
+    const radius = 60;
+
+    // Draw stamp circle lines
+    ctx.strokeStyle = "#be0129";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(stampX, stampY, radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(stampX, stampY, radius - 6, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Stamp Text: "DEGEN GRADE"
+    ctx.save();
+    ctx.fillStyle = "#be0129";
+    ctx.font = "bold 9px 'Oswald', sans-serif";
+    ctx.textAlign = "center";
+    ctx.translate(stampX, stampY - 38);
+    ctx.fillText("DEGEN GRADE", 0, 0);
+    ctx.restore();
+
+    // Stamp Grade Letter (Huge Ugly Dave font)
+    ctx.fillStyle = "#be0129";
+    ctx.font = "bold 70px 'Ugly Dave', sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(stats.grade, stampX, stampY + 22);
+
+    // Rotate stamp slightly for a messy realistic look
+    // (We already drew it, but we can draw some extra lines/scratches)
+    ctx.strokeStyle = "rgba(190, 1, 41, 0.4)";
+    ctx.lineWidth = 2;
+    drawWavyLine(stampX - radius - 10, stampY + 10, stampX + radius + 10, stampY - 15, 2, "rgba(190, 1, 41, 0.3)");
+
+    // 7. Remarks / Roast Box (Bottom)
+    const remarkX = 50;
+    const remarkY = 475;
+    const remarkW = canvas.width - 100;
+    const remarkH = 90;
+
+    ctx.fillStyle = "rgba(111, 69, 45, 0.05)";
+    ctx.fillRect(remarkX, remarkY, remarkW, remarkH);
+    drawSketchBox(remarkX, remarkY, remarkW, remarkH, 2, "#6f452d");
+
+    // "REMARKS:" heading
+    ctx.fillStyle = "#6f452d";
+    ctx.font = "bold 14px 'Oswald', sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText("TEACHER REMARKS:", remarkX + 15, remarkY + 28);
+
+    // Roast content (Ugly Dave Alternates font)
+    ctx.fillStyle = "#261c1a";
+    ctx.font = "normal 18px 'Ugly Dave Alternates', sans-serif";
+    
+    // Simple multi-line text wrapping helper
+    const words = stats.description.split(" ");
+    let line = "";
+    let lineY = remarkY + 54;
+    const maxLineWidth = remarkW - 30;
+
+    for (let i = 0; i < words.length; i++) {
+      const testLine = line + words[i] + " ";
+      const metrics = ctx.measureText(testLine);
+      if (metrics.width > maxLineWidth && i > 0) {
+        ctx.fillText(line, remarkX + 15, lineY);
+        line = words[i] + " ";
+        lineY += 24;
+      } else {
+        line = testLine;
+      }
+    }
+    ctx.fillText(line, remarkX + 15, lineY);
+
+    return canvas;
+  };
+
   const handleDownload = async () => {
     if (!stats || !base64Meme) return;
     setGeneratingImage(true);
 
     try {
-      // Ensure fonts are loaded before drawing
-      await document.fonts.ready;
+      const canvas = await drawReportCard();
+      if (!canvas) return;
 
-      const canvas = document.createElement("canvas");
-      canvas.width = 800;
-      canvas.height = 600;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-
-      // 1. Background
-      ctx.fillStyle = "#fee1bf"; // Peach background
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      // Helper function for hand-drawn wavy lines
-      const drawWavyLine = (x1: number, y1: number, x2: number, y2: number, width = 3, color = "#261c1a") => {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = width;
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        const midX = (x1 + x2) / 2 + (Math.random() - 0.5) * 6;
-        const midY = (y1 + y2) / 2 + (Math.random() - 0.5) * 6;
-        ctx.quadraticCurveTo(midX, midY, x2, y2);
-        ctx.stroke();
-      };
-
-      // Helper to draw a sketch box
-      const drawSketchBox = (x: number, y: number, w: number, h: number, width = 3, color = "#261c1a") => {
-        drawWavyLine(x, y, x + w, y, width, color);
-        drawWavyLine(x + w, y, x + w, y + h, width, color);
-        drawWavyLine(x + w, y + h, x, y + h, width, color);
-        drawWavyLine(x, y + h, x, y, width, color);
-      };
-
-      // 2. Double border sketch frame
-      drawSketchBox(15, 15, canvas.width - 30, canvas.height - 30, 4);
-      drawSketchBox(22, 22, canvas.width - 44, canvas.height - 44, 1.5, "#6f452d");
-
-      // 3. Header Text
-      ctx.fillStyle = "#261c1a";
-      ctx.textAlign = "center";
-      
-      // Title: "ON-CHAIN DEGENERACY REPORT"
-      ctx.font = "bold 38px 'Ugly Dave', sans-serif";
-      ctx.fillText("ON-CHAIN DEGENERACY REPORT", canvas.width / 2, 75);
-
-      // Student Wallet Subtitle
-      ctx.font = "normal 18px 'Oswald', sans-serif";
-      ctx.fillStyle = "#6f452d";
-      ctx.fillText(`STUDENT WALLET: ${walletAddress}`, canvas.width / 2, 105);
-
-      // Divider line
-      drawWavyLine(40, 125, canvas.width - 40, 125, 2, "#261c1a");
-
-      // 4. Draw Meme Image (Left Column)
-      const imgX = 50;
-      const imgY = 160;
-      const imgW = 280;
-      const imgH = 280;
-
-      // Draw shadow box behind image
-      ctx.fillStyle = "rgba(38, 28, 26, 0.15)";
-      ctx.fillRect(imgX + 8, imgY + 8, imgW, imgH);
-
-      // Draw white image background card
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(imgX, imgY, imgW, imgH);
-      drawSketchBox(imgX, imgY, imgW, imgH, 3);
-
-      // Draw the image
-      const img = new Image();
-      img.src = base64Meme;
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => {
-          ctx.drawImage(img, imgX + 10, imgY + 10, imgW - 20, imgH - 20);
-          resolve();
-        };
-        img.onerror = () => {
-          reject(new Error("Failed to load meme image onto canvas"));
-        };
-      });
-
-      // Label below image
-      ctx.fillStyle = "#261c1a";
-      ctx.font = "italic 16px 'Ugly Dave', sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(`Meme Grade: ${stats.grade}`, imgX + imgW / 2, imgY + imgH + 28);
-
-      // 5. Stats list (Right Column)
-      const statsX = 380;
-      const startStatsY = 180;
-      const rowGap = 34;
-
-      ctx.textAlign = "left";
-      ctx.fillStyle = "#261c1a";
-
-      const items = [
-        { label: "GAS SPENT:", value: `${stats.stats.gasSpent} SOL` },
-        { label: "JEET INDEX (QUICK SWAPS):", value: `${stats.stats.jeetIndex}` },
-        { label: "RUGS TOUCHED:", value: `${stats.stats.rugsTouched}` },
-        { label: "WIN RATE:", value: `${stats.stats.winRate}%` },
-        { label: "LIFETIME TRADES:", value: `${stats.stats.lifetimeTrades}` },
-      ];
-
-      items.forEach((item, index) => {
-        const itemY = startStatsY + index * rowGap;
-        
-        // Label (Oswald Font)
-        ctx.font = "bold 15px 'Oswald', sans-serif";
-        ctx.fillStyle = "#6f452d";
-        ctx.fillText(item.label, statsX, itemY);
-
-        // Value (Oswald Font, aligned right)
-        ctx.font = "bold 20px 'Oswald', sans-serif";
-        ctx.fillStyle = "#be0129";
-        ctx.fillText(item.value, statsX + 220, itemY);
-      });
-
-      // 6. Draw Overall Stamp Circle
-      const stampX = 690;
-      const stampY = 250;
-      const radius = 60;
-
-      // Draw stamp circle lines
-      ctx.strokeStyle = "#be0129";
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.arc(stampX, stampY, radius, 0, Math.PI * 2);
-      ctx.stroke();
-
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(stampX, stampY, radius - 6, 0, Math.PI * 2);
-      ctx.stroke();
-
-      // Stamp Text: "DEGEN GRADE"
-      ctx.save();
-      ctx.fillStyle = "#be0129";
-      ctx.font = "bold 9px 'Oswald', sans-serif";
-      ctx.textAlign = "center";
-      ctx.translate(stampX, stampY - 38);
-      ctx.fillText("DEGEN GRADE", 0, 0);
-      ctx.restore();
-
-      // Stamp Grade Letter (Huge Ugly Dave font)
-      ctx.fillStyle = "#be0129";
-      ctx.font = "bold 70px 'Ugly Dave', sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(stats.grade, stampX, stampY + 22);
-
-      // Rotate stamp slightly for a messy realistic look
-      // (We already drew it, but we can draw some extra lines/scratches)
-      ctx.strokeStyle = "rgba(190, 1, 41, 0.4)";
-      ctx.lineWidth = 2;
-      drawWavyLine(stampX - radius - 10, stampY + 10, stampX + radius + 10, stampY - 15, 2, "rgba(190, 1, 41, 0.3)");
-
-      // 7. Remarks / Roast Box (Bottom)
-      const remarkX = 50;
-      const remarkY = 475;
-      const remarkW = canvas.width - 100;
-      const remarkH = 90;
-
-      ctx.fillStyle = "rgba(111, 69, 45, 0.05)";
-      ctx.fillRect(remarkX, remarkY, remarkW, remarkH);
-      drawSketchBox(remarkX, remarkY, remarkW, remarkH, 2, "#6f452d");
-
-      // "REMARKS:" heading
-      ctx.fillStyle = "#6f452d";
-      ctx.font = "bold 14px 'Oswald', sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText("TEACHER REMARKS:", remarkX + 15, remarkY + 28);
-
-      // Roast content (Ugly Dave Alternates font)
-      ctx.fillStyle = "#261c1a";
-      ctx.font = "normal 18px 'Ugly Dave Alternates', sans-serif";
-      
-      // Simple multi-line text wrapping helper
-      const words = stats.description.split(" ");
-      let line = "";
-      let lineY = remarkY + 54;
-      const maxLineWidth = remarkW - 30;
-
-      for (let i = 0; i < words.length; i++) {
-        const testLine = line + words[i] + " ";
-        const metrics = ctx.measureText(testLine);
-        if (metrics.width > maxLineWidth && i > 0) {
-          ctx.fillText(line, remarkX + 15, lineY);
-          line = words[i] + " ";
-          lineY += 24;
-        } else {
-          line = testLine;
-        }
-      }
-      ctx.fillText(line, remarkX + 15, lineY);
-
-      // 8. Trigger download
+      // Trigger download
       const dataUrl = canvas.toDataURL("image/png");
       const link = document.createElement("a");
       link.download = `bobo_degeneracy_report_${walletAddress.slice(0, 8)}.png`;
@@ -274,21 +281,68 @@ export default function AuditModal({ isOpen, onClose, walletAddress }: AuditModa
     }
   };
 
-  const handleShare = () => {
-    if (!stats) return;
-    const tweetText = `My Solana wallet just got audited by bobo_OS.
+  const handleShare = async () => {
+    if (!stats || !base64Meme) return;
+    setGeneratingImage(true);
 
-Grade: ${stats.grade}
-Jeet Swaps: ${stats.stats.jeetIndex}
-Rugs Touched: ${stats.stats.rugsTouched}
-Gas Donated: ${stats.stats.gasSpent} SOL
+    try {
+      const canvas = await drawReportCard();
+      if (!canvas) {
+        setGeneratingImage(false);
+        return;
+      }
 
-"${stats.description}"
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          setGeneratingImage(false);
+          return;
+        }
 
-Perform your audit here: https://ai.bobolabs.xyz @bobo_os_sol`;
+        const file = new File([blob], "bobo_report_card.png", { type: "image/png" });
 
-    const shareUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}`;
-    window.open(shareUrl, "_blank");
+        // 1. Try Web Share API (native mobile share dialog)
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          try {
+            await navigator.share({
+              files: [file],
+              text: "@bobo__labs",
+            });
+            setGeneratingImage(false);
+            return;
+          } catch (shareErr) {
+            console.log("Web share failed/cancelled, trying clipboard fallback:", shareErr);
+          }
+        }
+
+        // 2. Clipboard Fallback
+        let copied = false;
+        try {
+          if (navigator.clipboard && window.ClipboardItem) {
+            await navigator.clipboard.write([
+              new ClipboardItem({ "image/png": blob })
+            ]);
+            copied = true;
+          }
+        } catch (clipErr) {
+          console.error("Failed to copy image to clipboard:", clipErr);
+        }
+
+        // 3. Open X with the tag
+        const shareUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent("@bobo__labs")}`;
+        window.open(shareUrl, "_blank");
+
+        if (copied) {
+          alert("Scorecard image copied to clipboard! Paste it directly (Ctrl+V / Cmd+V) into your tweet.");
+        } else {
+          alert("Could not automatically copy the scorecard to clipboard. Please download the card first, then upload it on X!");
+        }
+        setGeneratingImage(false);
+      }, "image/png");
+    } catch (err) {
+      console.error("Error sharing report card:", err);
+      alert("Failed to share report card. Try downloading it first.");
+      setGeneratingImage(false);
+    }
   };
 
   return (
@@ -438,13 +492,23 @@ Perform your audit here: https://ai.bobolabs.xyz @bobo_os_sol`;
               
               <button
                 onClick={handleShare}
-                className="flex-1 flex items-center justify-center gap-2 font-dave text-xl md:text-2xl bg-[#261c1a] hover:bg-[#261c1a]/90 text-[#fee1bf] border-3 border-[#261c1a] py-2.5 px-4 shadow-[4px_4px_0px_0px_#6f452d] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0px_0px_#6f452d] transition-all cursor-pointer"
+                disabled={generatingImage}
+                className="flex-1 flex items-center justify-center gap-2 font-dave text-xl md:text-2xl bg-[#261c1a] hover:bg-[#261c1a]/90 text-[#fee1bf] border-3 border-[#261c1a] py-2.5 px-4 shadow-[4px_4px_0px_0px_#6f452d] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0px_0px_#6f452d] disabled:opacity-50 transition-all cursor-pointer"
                 style={{
                   borderRadius: "15px 255px 15px 225px/225px 15px 255px 15px",
                 }}
               >
-                <Share2 className="w-5 h-5" />
-                SHARE ROAST ON X
+                {generatingImage ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    GENERATING CARD...
+                  </>
+                ) : (
+                  <>
+                    <Share2 className="w-5 h-5" />
+                    Share on X
+                  </>
+                )}
               </button>
             </div>
           </div>
