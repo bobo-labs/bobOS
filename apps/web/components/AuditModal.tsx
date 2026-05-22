@@ -121,12 +121,9 @@ export default function AuditModal({ isOpen, onClose, walletAddress }: AuditModa
     ctx.fillStyle = "#261c1a";
     ctx.textAlign = "center";
     
-    // Title: "ON-CHAIN DEGENERACY REPORT" (+ crown if OG)
+    // Title: "ON-CHAIN DEGENERACY REPORT" (clean — crown goes on the image instead)
     ctx.font = "bold 38px 'Ugly Dave', sans-serif";
-    const titleText = stats.isOG
-      ? "\uD83D\uDC51 ON-CHAIN DEGENERACY REPORT \uD83D\uDC51"
-      : "ON-CHAIN DEGENERACY REPORT";
-    ctx.fillText(titleText, canvas.width / 2, 75);
+    ctx.fillText("ON-CHAIN DEGENERACY REPORT", canvas.width / 2, 75);
 
     // Student Wallet Subtitle
     ctx.font = "normal 18px 'Oswald', sans-serif";
@@ -157,6 +154,15 @@ export default function AuditModal({ isOpen, onClose, walletAddress }: AuditModa
     await new Promise<void>((resolve, reject) => {
       img.onload = () => {
         ctx.drawImage(img, imgX + 10, imgY + 10, imgW - 20, imgH - 20);
+
+        // Crown overlay on image top-right corner for OG holders
+        if (stats.isOG) {
+          ctx.font = "52px serif";
+          ctx.textAlign = "right";
+          ctx.fillText("\uD83D\uDC51", imgX + imgW - 4, imgY + 52);
+          ctx.textAlign = "center"; // reset
+        }
+
         resolve();
       };
       img.onerror = () => {
@@ -411,15 +417,13 @@ export default function AuditModal({ isOpen, onClose, walletAddress }: AuditModa
             {/* Header */}
             <div className="text-center pb-2 border-b-2 border-dashed border-[#261c1a]/30">
               <h2 className="font-dave text-3xl md:text-4xl text-[#be0129] tracking-wider">
-                {stats.isOG && <span className="mr-2">👑</span>}
                 DEGENERACY REPORT CARD
-                {stats.isOG && <span className="ml-2">👑</span>}
               </h2>
               <p className="font-oswald text-xs md:text-sm text-[#6f452d] uppercase tracking-wider mt-1">
                 STUDENT: <span className="text-[#261c1a]">{truncateWallet(walletAddress)}</span>
               </p>
               {stats.isOG && (
-                <p className="font-oswald text-xs text-amber-600 font-bold tracking-widest mt-1 uppercase">
+                <p className="font-oswald text-xs text-[#6f452d] font-bold tracking-widest mt-1 uppercase">
                   ✦ OG Holder — $AGENT &amp; $BOBO Verified ✦
                 </p>
               )}
@@ -434,8 +438,9 @@ export default function AuditModal({ isOpen, onClose, walletAddress }: AuditModa
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
               {/* Left Column: Meme Asset */}
               <div className="flex flex-col items-center space-y-2">
+                {/* Image card — crown overlaid top-right corner for OG holders */}
                 <div 
-                  className="bg-white p-3 border-3 border-[#261c1a] shadow-md flex items-center justify-center max-w-[240px] w-full"
+                  className="relative bg-white p-3 border-3 border-[#261c1a] shadow-md flex items-center justify-center max-w-[240px] w-full"
                   style={{
                     borderRadius: "12px 12px 12px 12px/4px 12px 4px 12px",
                   }}
@@ -450,6 +455,15 @@ export default function AuditModal({ isOpen, onClose, walletAddress }: AuditModa
                     <div className="w-[180px] h-[180px] bg-neutral-100 flex items-center justify-center text-xs text-neutral-400 font-mono">
                       Image Loading...
                     </div>
+                  )}
+                  {/* Crown in top-right corner over the image */}
+                  {stats.isOG && (
+                    <span
+                      className="absolute top-0 right-0 text-4xl leading-none"
+                      style={{ transform: "translate(30%, -30%) rotate(12deg)", filter: "drop-shadow(1px 2px 0px #261c1a)" }}
+                    >
+                      👑
+                    </span>
                   )}
                 </div>
                 <span className="font-dave-alt text-lg italic text-[#6f452d]">
