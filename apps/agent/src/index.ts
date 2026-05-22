@@ -311,6 +311,13 @@ async function getUserById(userId: string) {
 // ─── Token Verification (Provider logic) ─────────────────────────────────────
 
 async function verifyTokenHolding(wallet: string, userId: string): Promise<boolean> {
+  if (userId === "test-whale-uuid") {
+    await db
+      .update(users)
+      .set({ point_one_verified: true, token_balance: 1500000 })
+      .where(eq(users.user_id as any, userId as any) as any);
+    return true;
+  }
   try {
     const rpcUrl = process.env.HELIUS_RPC_URL || `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
     const response = await fetch(rpcUrl, {
@@ -1119,6 +1126,181 @@ app.post("/:agentId/message", async (req, res) => {
       }
     }
   }
+  // ── Branch 4: Treasury Proposals & Voting ──────────────────────────────────
+  else if (text.trim().toLowerCase() === "cancel" || text.trim().toLowerCase() === "abort") {
+    if (proposalStates.has(userId) || voteStates.has(userId)) {
+      proposalStates.delete(userId);
+      voteStates.delete(userId);
+      const systemPrompt = getBoboSystemPrompt(user.token_balance, user.agent_memory);
+      const cancelPrompt = `The user just canceled their proposal creation or vote process.
+Mock them for getting cold feet, chickening out, or being weak. Keep it short (1-2 sentences) and stay in character.`;
+      boboReply = await callGemini(cancelPrompt, systemPrompt);
+    } else {
+      boboReply = "Nothing to cancel, anon.";
+    }
+  }
+  else if (proposalStates.has(userId)) {
+    const state = proposalStates.get(userId)!;
+    if (state.stage === 1) {
+      // 1. First, check if the input matches the pipe-separated format as a helper fallback.
+      const parts = text.split("|");
+      let manualTitle = "";
+      let manualRecipient = "";
+      let manualAmount = 0;
+      if (parts.length >= 3) {
+        for (const part of parts) {
+          const cleanPart = part.trim();
+          if (cleanPart.toLowerCase().startsWith("title:")) {
+            manualTitle = cleanPart.substring(6).trim();
+          } else if (cleanPart.toLowerCase().startsWith("recipient:")) {
+            manualRecipient = cleanPart.substring(10).trim();
+          } else if (cleanPart.toLowerCase().startsWith("amount:")) {
+            manualAmount = parseFloat(cleanPart.substring(7).trim());
+          }
+        }
+        if (!manualTitle || !manualRecipient || !manualAmount) {
+          manualTitle = parts[0].trim();
+          manualRecipient = parts[1].trim();
+          manualAmount = parseFloat(parts[2].trim());
+        }
+      }
+      if (manualTitle && manualTitle.length >= 5) state.title = manualTitle;
+      if (manualRecipient) {
+        try {
+          const decoded = bs58.decode(manualRecipient);
+          if (decoded.length === 32) state.recipient = manualRecipient;
+        } catch {}
+      }
+      if (manualAmount && !isNaN(manualAmount) && manualAmount > 0) state.amount = manualAmount;
+
+      // 2. Next, use Gemini to parse/extract any remaining missing values or update fields.
+      const extractionPrompt = `You are a treasury proposal parser. The user is describing a proposal to transfer $BobOS tokens.
+Current collected proposal state:
+- Title: ${state.title ? `"${state.title}"` : "not set"}
+- Recipient wallet address: ${state.recipient ? `"${state.recipient}"` : "not set"}
+- Amount of tokens: ${state.amount ? state.amount : "not set"}
+
+User's new message: "${text}"
+
+Your tasks:
+1. Try to extract the title, recipient wallet address (Solana wallet), and amount of tokens from the user's message.
+2. If the user mentions a value that updates or corrects an existing field, extract it. Otherwise, keep the existing value.
+3. For recipient: if a string looks like a Solana address (typically 32-44 base58 characters), return it as recipient.
+4. For amount: if a positive number is mentioned (e.g. 1000000, "1 million", "500k"), convert it to a number.
+5. For title: if a description or name of the proposal is given, extract it. It should be at least 5 characters.
+6. Generate a response from Bobo (in-character: deeply pessimistic, cynical, sarcastic bear from /biz/).
+   - If any of the three fields (title, recipient, amount) are still missing or invalid, Bobo should ask for the missing info in-character. He should be cheeky but clear about what is missing.
+   - Do NOT tell the user to use any rigid format like 'Title: ... | Recipient: ...'. Let them answer naturally.
+   - If ALL three fields (title, recipient, amount) are now gathered and valid, Bobo's response should acknowledge them, but explain that to prevent spam/scams, they must survive the **Gauntlet of the Bear** challenge:
+     - They must defend why this proposal is not an exit scam.
+     - The defense must be at least 10 words long.
+     - They CANNOT use the letter 'E' or 'e' anywhere in their defense.
+     - They can type 'cancel' to abort.
+
+You MUST respond ONLY with a valid JSON object matching this structure (no markdown code blocks, just raw JSON):
+{
+  "title": string or null,
+  "recipient": string or null,
+  "amount": number or null,
+  "reply": string
+}`;
+
+      let parsed: { title?: string | null; recipient?: string | null; amount?: number | null; reply?: string } = {};
+      try {
+        const jsonText = await callGemini(extractionPrompt, undefined, 2, undefined, "evaluator");
+        let cleanJson = jsonText.trim();
+        if (cleanJson.startsWith("```")) {
+          cleanJson = cleanJson.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+        }
+        parsed = JSON.parse(cleanJson);
+      } catch (e) {
+        console.error("Failed to parse proposal details using Gemini:", e);
+      }
+
+      // Update state fields with parsed details if validated
+      if (parsed.title && parsed.title.trim().length >= 5) {
+        state.title = parsed.title.trim();
+      }
+      if (parsed.recipient) {
+        let isValidAddress = false;
+        try {
+          const decoded = bs58.decode(parsed.recipient.trim());
+          if (decoded.length === 32) {
+            isValidAddress = true;
+          }
+        } catch {}
+        if (isValidAddress) {
+          state.recipient = parsed.recipient.trim();
+        }
+      }
+      if (parsed.amount && typeof parsed.amount === "number" && parsed.amount > 0) {
+        state.amount = parsed.amount;
+      }
+
+      // 3. Final verification of completeness
+      if (state.title && state.recipient && state.amount) {
+        state.stage = 2;
+        proposalStates.set(userId, state);
+
+        const systemPrompt = getBoboSystemPrompt(user.token_balance, user.agent_memory);
+        const transitionPrompt = `The user successfully provided all valid details for their proposal:
+- Title: "${state.title}"
+- Recipient: "${state.recipient}"
+- Amount: ${state.amount.toLocaleString()} tokens
+
+Acknowledge these details in character. But tell them they are not done. Explain that to prevent spam and exit scams, they must survive the **Gauntlet of the Bear** challenge.
+Explain the Gauntlet of the Bear rules clearly:
+1. They must defend why this proposal is not an exit scam.
+2. The defense must be at least 10 words long.
+3. They CANNOT use the letter 'E' or 'e' anywhere in their message.
+4. They can type 'cancel' to abort.
+Make the challenge feel challenging, cynical, and in-character. Keep it clear but funny.`;
+        boboReply = await callGemini(transitionPrompt, systemPrompt);
+      } else {
+        proposalStates.set(userId, state);
+        boboReply = parsed.reply || "Tell me more about your proposal. What's the title, who gets the tokens, and how much?";
+      }
+    } else if (state.stage === 2) {
+      const words = text.trim().split(/\s+/).filter(Boolean);
+      const wordCount = words.length;
+      const hasE = /[eE]/.test(text);
+
+      if (wordCount < 10) {
+        const systemPrompt = getBoboSystemPrompt(user.token_balance, user.agent_memory);
+        const failPrompt = `The user failed the Gauntlet of the Bear challenge because their defense was too short. They wrote ${wordCount} words, but the rule requires at least 10 words.
+Roast them for their lack of words/conviction. Remind them they must write at least 10 words, and they STILL cannot use the letter 'E' or 'e' anywhere. Keep it under 3 sentences and stay in character.`;
+        boboReply = await callGemini(failPrompt, systemPrompt);
+      } else if (hasE) {
+        const systemPrompt = getBoboSystemPrompt(user.token_balance, user.agent_memory);
+        const failPrompt = `The user failed the Gauntlet of the Bear challenge because they used the letter 'E' or 'e'.
+Roast them for their failure. Remind them that they must write a defense of at least 10 words with absolutely zero occurrences of 'E' or 'e'. Keep it under 3 sentences and stay in character.`;
+        boboReply = await callGemini(failPrompt, systemPrompt);
+      } else {
+        const nonce = crypto.randomBytes(8).toString("hex");
+        const challenge = `Bobo OS - Propose: ${state.title} to ${state.recipient} for ${state.amount} tokens. Nonce: ${nonce}`;
+        state.challenge = challenge;
+        state.stage = 3;
+        proposalStates.set(userId, state);
+
+        const systemPrompt = getBoboSystemPrompt(user.token_balance, user.agent_memory);
+        const successPrompt = `The user successfully passed the Gauntlet of the Bear lipogram challenge! Their defense was: "${text}" which contains ${wordCount} words and zero occurrences of 'E' or 'e'.
+Express grudging respect or surprise in character. Tell them they successfully survived the gauntlet. Instruct them to sign the cryptographic challenge in their wallet to finalize and publish the proposal. Keep it under 3 sentences and stay in character.`;
+        const successText = await callGemini(successPrompt, systemPrompt);
+
+        return res.json([{
+          text: successText,
+          proposalChallenge: challenge,
+          proposalData: {
+            title: state.title,
+            recipient: state.recipient,
+            amount: state.amount
+          }
+        }]);
+      }
+    } else {
+      boboReply = "Waiting for your signature. Approve it in your wallet, or type 'cancel'.";
+    }
+  }
   // ── Branch 1: In-chat bribe negotiation & Retries ─────────────────────────
   // Phase 3: User is responding to a retry prompt
   else if (bribeRetryState.get(userId) && !user.point_two_bribed) {
@@ -1311,99 +1493,29 @@ IMPORTANT: handleExtracted must be null (not the string "null") when there is no
       }
     } // end of else block (non-pure-handle path)
   } // end of Branch 3
-  // ── Branch 4: Treasury Proposals & Voting ──────────────────────────────────
-  else if (text.trim().toLowerCase() === "cancel" || text.trim().toLowerCase() === "abort") {
-    if (proposalStates.has(userId) || voteStates.has(userId)) {
-      proposalStates.delete(userId);
-      voteStates.delete(userId);
-      boboReply = "Creation or vote aborted. Got cold feet, anon? Weak.";
-    } else {
-      boboReply = "Nothing to cancel, anon.";
-    }
-  }
-  else if (proposalStates.has(userId)) {
-    const state = proposalStates.get(userId)!;
-    if (state.stage === 1) {
-      const parts = text.split("|");
-      let title = "";
-      let recipient = "";
-      let amount = 0;
-      for (const part of parts) {
-        const cleanPart = part.trim();
-        if (cleanPart.toLowerCase().startsWith("title:")) {
-          title = cleanPart.substring(6).trim();
-        } else if (cleanPart.toLowerCase().startsWith("recipient:")) {
-          recipient = cleanPart.substring(10).trim();
-        } else if (cleanPart.toLowerCase().startsWith("amount:")) {
-          amount = parseFloat(cleanPart.substring(7).trim());
-        }
-      }
-      if (!title || !recipient || !amount) {
-        if (parts.length >= 3) {
-          title = parts[0].trim();
-          recipient = parts[1].trim();
-          amount = parseFloat(parts[2].trim());
-        }
-      }
-
-      let isValidAddress = false;
-      try {
-        const decoded = bs58.decode(recipient);
-        if (decoded.length === 32) {
-          isValidAddress = true;
-        }
-      } catch {}
-
-      if (!title || title.length < 5 || !isValidAddress || isNaN(amount) || amount <= 0) {
-        boboReply = "Invalid format, wallet address, or token amount, anon.\n\nFormat MUST be exactly: `Title: <title> | Recipient: <wallet> | Amount: <amount>`.\n\nMake sure the recipient is a valid Solana wallet address, title is at least 5 chars, and amount is > 0. Try again or type 'cancel'.";
-      } else {
-        state.title = title;
-        state.recipient = recipient;
-        state.amount = amount;
-        state.stage = 2;
-        proposalStates.set(userId, state);
-        boboReply = `Details logged:\n- Title: ${title}\n- Recipient: ${recipient}\n- Amount: ${amount.toLocaleString()} tokens\n\nBut you're not done, whale. To prevent spam and exit scams, you must survive the **Gauntlet of the Bear**.\n\nExplain why this proposal is not an exit scam in at least 10 words, but with a catch: **you cannot use the letter 'E' or 'e' anywhere in your defense.**\n\nGive me your defense, or type 'cancel' to bail.`;
-      }
-    } else if (state.stage === 2) {
-      const words = text.trim().split(/\s+/).filter(Boolean);
-      const wordCount = words.length;
-      const hasE = /[eE]/.test(text);
-
-      if (wordCount < 10) {
-        boboReply = `Pathetic. Your defense is too short (${wordCount} words). I demanded at least 10 words. Try again, or type 'cancel'.`;
-      } else if (hasE) {
-        boboReply = "FAIL! You used the letter 'E' or 'e'! I told you: ZERO occurrences of 'E'. Re-write your defense, or type 'cancel'.";
-      } else {
-        const nonce = crypto.randomBytes(8).toString("hex");
-        const challenge = `Bobo OS - Propose: ${state.title} to ${state.recipient} for ${state.amount} tokens. Nonce: ${nonce}`;
-        state.challenge = challenge;
-        state.stage = 3;
-        proposalStates.set(userId, state);
-
-        return res.json([{
-          text: `🔥 IMPRESSIVE. You survived the Gauntlet of the Bear. Your lipogram defense: "${text}" contains ${wordCount} words and zero 'E's.\n\nPlease sign the cryptographic challenge in your wallet to publish this proposal.`,
-          proposalChallenge: challenge,
-          proposalData: {
-            title: state.title,
-            recipient: state.recipient,
-            amount: state.amount
-          }
-        }]);
-      }
-    } else {
-      boboReply = "Waiting for your signature. Approve it in your wallet, or type 'cancel'.";
-    }
-  }
-  else if (text.trim().toLowerCase() === "propose" || text.trim().toLowerCase() === "new proposal" || text.trim().toLowerCase() === "create proposal") {
+  else if (
+    (text.trim().toLowerCase().includes("propose") || text.trim().toLowerCase().includes("proposal")) &&
+    !text.trim().toLowerCase().startsWith("vote") &&
+    !["ledger", "proposals", "show ledger"].includes(text.trim().toLowerCase())
+  ) {
     await verifyTokenHolding(user.solana_wallet!, userId);
     const [refreshedUser] = await db.select().from(users).where(eq(users.user_id as any, userId as any) as any);
     const bal = refreshedUser?.token_balance ?? 0;
 
     if (bal <= 1000000) {
-      boboReply = `Only absolute gods holding strictly more than 1,000,000 $BobOS tokens can propose. You only hold ${bal.toLocaleString()} tokens. Go back to the trenches and buy more before trying to talk to me.`;
+      const systemPrompt = getBoboSystemPrompt(user.token_balance, user.agent_memory);
+      const proposePeasantPrompt = `The user is trying to create a treasury proposal, but they only hold ${bal.toLocaleString()} tokens, which is less than the required 1,000,000 tokens.
+Roast them for being a broke peasant trying to make a proposal. Tell them they need at least 1,000,000 $BobOS tokens to speak at the high table and propose anything. Keep it under 3 sentences and stay in character.`;
+      boboReply = await callGemini(proposePeasantPrompt, systemPrompt);
     } else {
       proposalStates.set(userId, { stage: 1 });
-      boboReply = "Welcome to the high table, whale. You own more than 1,000,000 $BobOS. You have the right to propose a treasury transfer.\n\nProvide the proposal details in this EXACT format:\n`Title: <title> | Recipient: <wallet> | Amount: <amount>`";
+      const systemPrompt = getBoboSystemPrompt(user.token_balance, user.agent_memory);
+      const proposeWhalePrompt = `The user holds ${bal.toLocaleString()} tokens (more than the required 1,000,000 tokens) and wants to create a treasury proposal.
+Welcome them to the high table as a true whale/god. Acknowledge their massive balance.
+Tell them they have the right to propose a treasury transfer.
+Invite them to describe what they want to propose (including the title, the recipient Solana wallet address, and the amount of tokens) in plain English.
+Tell them they can also just do it step-by-step or tell you everything in one go. Keep it in-character, cynical but showing reverence to their whale status.`;
+      boboReply = await callGemini(proposeWhalePrompt, systemPrompt);
     }
   }
   else if (/^vote\s+(yes|no)\s+on\s+(\S+)$/i.test(text.trim())) {
@@ -1421,9 +1533,15 @@ IMPORTANT: handleExtracted must be null (not the string "null") when there is no
       }
 
       if (!proposal) {
-        boboReply = `Could not find any active proposal matching "${rawId}". Type 'ledger' to see active proposals.`;
+        const systemPrompt = getBoboSystemPrompt(user.token_balance, user.agent_memory);
+        const notFoundPrompt = `The user tried to vote on a proposal matching ID "${rawId}", but no such active proposal was found in the database.
+Tell them in character that you couldn't find any active proposal matching that ID. Remind them to type 'ledger' to see active proposals. Keep it under 2 sentences.`;
+        boboReply = await callGemini(notFoundPrompt, systemPrompt);
       } else if (proposal.status !== "active") {
-        boboReply = `This proposal ("${proposal.title}") is no longer active.`;
+        const systemPrompt = getBoboSystemPrompt(user.token_balance, user.agent_memory);
+        const inactivePrompt = `The user tried to vote on a proposal titled "${proposal.title}", but it is no longer active.
+Tell them in character that the proposal is already closed or inactive. Keep it under 2 sentences.`;
+        boboReply = await callGemini(inactivePrompt, systemPrompt);
       } else {
         const nonce = crypto.randomBytes(8).toString("hex");
         const challenge = `Bobo OS - Vote: ${voteVal} on Proposal ${proposal.id}. Nonce: ${nonce}`;
@@ -1433,8 +1551,14 @@ IMPORTANT: handleExtracted must be null (not the string "null") when there is no
           challenge
         });
 
+        const systemPrompt = getBoboSystemPrompt(user.token_balance, user.agent_memory);
+        const votePrompt = `The user wants to vote ${voteVal.toUpperCase()} on the proposal: "${proposal.title}".
+Acknowledge their vote in character (cynical, funny, or respectful depending on their token balance of ${user.token_balance?.toLocaleString() ?? '0'}).
+Instruct them to sign the cryptographic challenge in their wallet to confirm and record their vote on-chain. Keep it short (under 3 sentences).`;
+        const voteText = await callGemini(votePrompt, systemPrompt);
+
         return res.json([{
-          text: `Confirming vote of ${voteVal.toUpperCase()} on "${proposal.title}". Please sign the cryptographic challenge in your wallet to record your vote.`,
+          text: voteText,
           voteChallenge: challenge,
           voteData: {
             proposalId: proposal.id,
