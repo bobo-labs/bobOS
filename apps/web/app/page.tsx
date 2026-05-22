@@ -25,7 +25,7 @@ const BOBO_MEMES = [
 ];
 
 export default function Home() {
-  const { publicKey, connected, sendTransaction, wallet } = useWallet();
+  const { publicKey, connected, sendTransaction, wallet, signMessage } = useWallet();
   const { connection } = useConnection();
   const [userData, setUserData] = useState<any>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -447,6 +447,64 @@ export default function Home() {
         }
       }
       // ── End Bribe Transaction Flow ──────────────────────────────────────
+
+      // ── Proposal Verification Flow ──────────────────────────────────────
+      if (res.proposalChallenge) {
+        // Small delay so user can read Bobo's message before the signature prompt
+        await new Promise(r => setTimeout(r, 1000));
+
+        if (!signMessage) {
+          setChatMessages(prev => [...prev, { sender: "Bobo", text: "❌ Your wallet adapter doesn't support message signing." }]);
+        } else {
+          try {
+            setChatMessages(prev => [...prev, { sender: "Bobo", text: "⏳ Requesting signature to verify proposal..." }]);
+            const messageBytes = new TextEncoder().encode(res.proposalChallenge);
+            const signature = await signMessage(messageBytes);
+            const signatureHex = Array.from(signature).map(b => b.toString(16).padStart(2, '0')).join('');
+            
+            setIsTyping(true);
+            setTypingMeme(BOBO_MEMES[Math.floor(Math.random() * BOBO_MEMES.length)]);
+            
+            const sysRes = await submitChat(publicKey.toBase58(), `[SYSTEM: CREATE_PROPOSAL:${signatureHex}]`);
+            setChatMessages(prev => [...prev, { sender: "Bobo", text: sysRes.reply }]);
+          } catch (signErr: any) {
+            console.error("Proposal sign error:", signErr);
+            setChatMessages(prev => [...prev, { sender: "Bobo", text: "❌ Proposal signature rejected or failed." }]);
+            // Notify the backend to clear the state
+            await submitChat(publicKey.toBase58(), "cancel");
+          }
+        }
+      }
+      // ── End Proposal Verification Flow ──────────────────────────────────
+
+      // ── Vote Verification Flow ──────────────────────────────────────────
+      if (res.voteChallenge && res.voteData) {
+        // Small delay so user can read Bobo's message before the signature prompt
+        await new Promise(r => setTimeout(r, 1000));
+
+        if (!signMessage) {
+          setChatMessages(prev => [...prev, { sender: "Bobo", text: "❌ Your wallet adapter doesn't support message signing." }]);
+        } else {
+          try {
+            setChatMessages(prev => [...prev, { sender: "Bobo", text: "⏳ Requesting signature to verify vote..." }]);
+            const messageBytes = new TextEncoder().encode(res.voteChallenge);
+            const signature = await signMessage(messageBytes);
+            const signatureHex = Array.from(signature).map(b => b.toString(16).padStart(2, '0')).join('');
+            
+            setIsTyping(true);
+            setTypingMeme(BOBO_MEMES[Math.floor(Math.random() * BOBO_MEMES.length)]);
+            
+            const sysRes = await submitChat(publicKey.toBase58(), `[SYSTEM: VOTE_PROPOSAL:${res.voteData.proposalId}:${res.voteData.vote}:${signatureHex}]`);
+            setChatMessages(prev => [...prev, { sender: "Bobo", text: sysRes.reply }]);
+          } catch (signErr: any) {
+            console.error("Vote sign error:", signErr);
+            setChatMessages(prev => [...prev, { sender: "Bobo", text: "❌ Vote signature rejected or failed." }]);
+            // Notify the backend to clear the state
+            await submitChat(publicKey.toBase58(), "cancel");
+          }
+        }
+      }
+      // ── End Vote Verification Flow ──────────────────────────────────────
 
       if (res.readyToDump) {
         setTimeout(() => setCompletionTransitioned(true), 4000);

@@ -66,6 +66,11 @@ export async function submitChat(walletAddress: string, message: string) {
   let bribeMint: string | undefined = undefined;
   let openJupiter = false;
 
+  let proposalChallenge = undefined;
+  let proposalData = undefined;
+  let voteChallenge = undefined;
+  let voteData = undefined;
+
   try {
     // 1. Get user UUID from wallet address (single DB query — removed the redundant second query)
     const [user] = await db.select().from(users).where(eq(users.solana_wallet, walletAddress));
@@ -96,7 +101,7 @@ export async function submitChat(walletAddress: string, message: string) {
     if (messageRes.ok) {
       const messagesArray = await messageRes.json();
       if (Array.isArray(messagesArray) && messagesArray.length > 0) {
-         replyText = messagesArray.map((m: any) => m.text).join("\\n");
+         replyText = messagesArray.map((m: any) => m.text).join("\n");
          replyImage = messagesArray.find((m: any) => !!m.image)?.image;
          isReadyToDump = !!messagesArray.find((m: any) => !!m.readyToDump)?.readyToDump;
          const bribeMsg = messagesArray.find((m: any) => m.bribeAmount !== undefined);
@@ -109,6 +114,17 @@ export async function submitChat(walletAddress: string, message: string) {
          openJupiter = jupiterMsg ? true : false;
          // convincedOrBribed is derived from readyToDump signal — no second DB query needed
          convincedOrBribed = isReadyToDump;
+
+         const propMsg = messagesArray.find((m: any) => m.proposalChallenge !== undefined);
+         if (propMsg) {
+           proposalChallenge = propMsg.proposalChallenge;
+           proposalData = propMsg.proposalData;
+         }
+         const voteMsg = messagesArray.find((m: any) => m.voteChallenge !== undefined);
+         if (voteMsg) {
+           voteChallenge = voteMsg.voteChallenge;
+           voteData = voteMsg.voteData;
+         }
       }
     } else {
       replyText = "The agent choked on its response.";
@@ -124,8 +140,21 @@ export async function submitChat(walletAddress: string, message: string) {
     const mint = process.env.AGENT_TOKEN_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     jupiterUrl = `https://jup.ag/?sell=So11111111111111111111111111111111111111112&buy=${mint}`;
   }
-  
-  return { reply: replyText, image: replyImage, convinced: convincedOrBribed, readyToDump: isReadyToDump, bribeAmount, bribeWallet, bribeMint, jupiterUrl };
+
+  return { 
+    reply: replyText, 
+    image: replyImage, 
+    convinced: convincedOrBribed, 
+    readyToDump: isReadyToDump, 
+    bribeAmount, 
+    bribeWallet, 
+    bribeMint, 
+    jupiterUrl,
+    proposalChallenge,
+    proposalData,
+    voteChallenge,
+    voteData
+  };
 }
 
 export async function wipeUserProgress(walletAddress: string) {

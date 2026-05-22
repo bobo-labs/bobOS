@@ -17,3 +17,29 @@ export const users = pgTable("users", {
     walletIdx: uniqueIndex("wallet_idx").on(table.solana_wallet),
   };
 });
+
+export const proposals = pgTable("proposals", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  proposer_wallet: varchar("proposer_wallet", { length: 44 }).notNull(),
+  title: text("title").notNull(),
+  amount: doublePrecision("amount").notNull(),
+  recipient: varchar("recipient", { length: 44 }).notNull(),
+  status: varchar("status", { length: 20 }).default("active").notNull(), // 'active', 'passed', 'defeated'
+  remarks: text("remarks"), // Bobo's custom commentary on this proposal
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const votes = pgTable("votes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  proposal_id: uuid("proposal_id").references(() => proposals.id, { onDelete: "cascade" }).notNull(),
+  voter_wallet: varchar("voter_wallet", { length: 44 }).notNull(),
+  vote: varchar("vote", { length: 3 }).notNull(), // 'yes' or 'no'
+  weight: doublePrecision("weight").notNull(), // User's token balance at time of vote
+  signature: text("signature").notNull(),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+}, (table) => {
+  return {
+    proposalVoterIdx: uniqueIndex("proposal_voter_idx").on(table.proposal_id, table.voter_wallet),
+  };
+});
+

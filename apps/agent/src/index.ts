@@ -13,13 +13,15 @@
 import "dotenv/config"; // ← Must be first: loads .env before Pool is created
 import express from "express";
 import cors from "cors";
-import { db, users } from "@bobos/database";
+import { db, users, proposals, votes } from "@bobos/database";
 import { eq, sql } from "drizzle-orm";
 import OAuth from "oauth-1.0a";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import nacl from "tweetnacl";
+import bs58 from "bs58";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -145,6 +147,33 @@ const bribeNegotiationState = new Map<string, "tip" | "bribe">();
 // Tracks users who failed/cancelled a transaction and are being asked to retry
 const bribeRetryState = new Map<string, boolean>();
 const MIN_BRIBE_AMOUNT = 0.1;
+
+// ─── Proposal and Vote States ────────────────────────────────────────────────
+const proposalStates = new Map<string, {
+  stage: number;
+  title?: string;
+  recipient?: string;
+  amount?: number;
+  challenge?: string;
+}>();
+
+const voteStates = new Map<string, {
+  proposalId: string;
+  vote: 'yes' | 'no';
+  challenge: string;
+}>();
+
+function verifySolanaSignature(walletAddress: string, message: string, signatureHex: string): boolean {
+  try {
+    const signature = Uint8Array.from(Buffer.from(signatureHex, "hex"));
+    const messageBytes = new TextEncoder().encode(message);
+    const publicKeyBytes = bs58.decode(walletAddress);
+    return nacl.sign.detached.verify(messageBytes, signature, publicKeyBytes);
+  } catch (e) {
+    console.error("Signature verification error:", e);
+    return false;
+  }
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -897,7 +926,7 @@ app.get("/leaderboard", async (_req, res) => {
       .orderBy(sql`${users.roasts_count} DESC`)
       .limit(3);
 
-    const formatted = top3.map((u, i) => ({
+    const formatted = top3.map((u: any, i: number) => ({
       rank: i + 1,
       wallet: u.wallet
         ? `${u.wallet.substring(0, 4)}...${u.wallet.substring(u.wallet.length - 4)}`
@@ -956,7 +985,97 @@ app.post("/:agentId/message", async (req, res) => {
   ];
 
   // ── Branch 0: System Error Handling ────────────────────────────────────────
-  if (text === "[SYSTEM: TX_FAILED]") {
+  if (text.startsWith("[SYSTEM: CREATE_PROPOSAL:")) {
+    const signatureHex = text.replace("[SYSTEM: CREATE_PROPOSAL:", "").replace("]", "").trim();
+    const state = proposalStates.get(userId);
+    if (!state || state.stage !== 3 || !state.challenge || !state.title || !state.recipient || !state.amount) {
+      proposalStates.delete(userId);
+      return res.json([{ text: "No active proposal creation flow found. Start over by typing 'propose'." }]);
+    }
+
+    const verified = verifySolanaSignature(user.solana_wallet!, state.challenge, signatureHex);
+    if (!verified) {
+      proposalStates.delete(userId);
+      return res.json([{ text: "Signature verification failed! Are you trying to spoof the proposal private key, anon?" }]);
+    }
+
+    // Generate cynical remarks from Bobo via Gemini
+    const roastPrompt = `You are Bobo the Bear. A user with wallet ${user.solana_wallet} has proposed: "${state.title}" requesting "${state.amount}" tokens to recipient wallet "${state.recipient}".
+    Write a short, deeply cynical, pessimistic, and funny comment (remarks) on why this proposal is a complete scam, absolute trash, and will lead to financial ruin. Keep it under 2 sentences. Do not use quotes.`;
+    
+    const remarks = await callGemini(roastPrompt);
+    const cleanRemarks = remarks.replace(/^["'`]+|["'`]+$/g, '').trim();
+
+    // Insert proposal to DB
+    await db.insert(proposals).values({
+      proposer_wallet: user.solana_wallet!,
+      title: state.title,
+      amount: state.amount,
+      recipient: state.recipient,
+      status: "active",
+      remarks: cleanRemarks
+    });
+
+    proposalStates.delete(userId);
+    return res.json([{ text: `🎉 PROPOSAL PUBLISHED!\n\nTitle: ${state.title}\nRecipient: ${state.recipient}\nAmount: ${state.amount} tokens\n\nBobo's Remarks: "${cleanRemarks}"` }]);
+  }
+  else if (text.startsWith("[SYSTEM: VOTE_PROPOSAL:")) {
+    const parts = text.replace("[SYSTEM: VOTE_PROPOSAL:", "").replace("]", "").split(":");
+    if (parts.length < 3) {
+      return res.json([{ text: "Invalid vote payload." }]);
+    }
+    const proposalId = parts[0];
+    const voteVal = parts[1] as 'yes' | 'no';
+    const signatureHex = parts[2];
+
+    const state = voteStates.get(userId);
+    if (!state || state.proposalId !== proposalId || state.vote !== voteVal || !state.challenge) {
+      voteStates.delete(userId);
+      return res.json([{ text: "No active voting flow found for this proposal." }]);
+    }
+
+    const verified = verifySolanaSignature(user.solana_wallet!, state.challenge, signatureHex);
+    if (!verified) {
+      voteStates.delete(userId);
+      return res.json([{ text: "Vote signature verification failed!" }]);
+    }
+
+    // Trigger verifyTokenHolding first to get the freshest balance for the user
+    await verifyTokenHolding(user.solana_wallet!, userId);
+    
+    // Fetch refreshed user record
+    const [refreshedUser] = await db.select().from(users).where(eq(users.user_id as any, userId as any) as any);
+    const weight = refreshedUser?.token_balance ?? 0;
+
+    // Retrieve active proposal to make sure it exists
+    const [proposal] = await db.select().from(proposals).where(eq(proposals.id as any, proposalId as any) as any);
+    if (!proposal || proposal.status !== "active") {
+      voteStates.delete(userId);
+      return res.json([{ text: "This proposal is no longer active." }]);
+    }
+
+    // Select existing votes for this proposal, filter in memory by wallet (Proxy constraint)
+    const allProposalVotes = await db.select().from(votes).where(eq(votes.proposal_id as any, proposalId as any) as any);
+    const existingVote = allProposalVotes.find((v: any) => v.voter_wallet === user.solana_wallet);
+
+    if (existingVote) {
+      await db.update(votes)
+        .set({ vote: voteVal, weight, signature: signatureHex })
+        .where(eq(votes.id as any, existingVote.id as any) as any);
+    } else {
+      await db.insert(votes).values({
+        proposal_id: proposalId,
+        voter_wallet: user.solana_wallet!,
+        vote: voteVal,
+        weight,
+        signature: signatureHex
+      });
+    }
+
+    voteStates.delete(userId);
+    return res.json([{ text: `🗳️ VOTE RECORDED!\n\nYou voted ${voteVal.toUpperCase()} on "${proposal.title}" with a weight of ${weight.toLocaleString()} tokens.` }]);
+  }
+  else if (text === "[SYSTEM: TX_FAILED]") {
     bribeRetryState.set(userId, true);
     bribeNegotiationState.delete(userId);
     boboReply = "Transaction failed. Your wallet choked or you chickened out. Do you want to retry the transaction, normie?";
@@ -1192,6 +1311,180 @@ IMPORTANT: handleExtracted must be null (not the string "null") when there is no
       }
     } // end of else block (non-pure-handle path)
   } // end of Branch 3
+  // ── Branch 4: Treasury Proposals & Voting ──────────────────────────────────
+  else if (text.trim().toLowerCase() === "cancel" || text.trim().toLowerCase() === "abort") {
+    if (proposalStates.has(userId) || voteStates.has(userId)) {
+      proposalStates.delete(userId);
+      voteStates.delete(userId);
+      boboReply = "Creation or vote aborted. Got cold feet, anon? Weak.";
+    } else {
+      boboReply = "Nothing to cancel, anon.";
+    }
+  }
+  else if (proposalStates.has(userId)) {
+    const state = proposalStates.get(userId)!;
+    if (state.stage === 1) {
+      const parts = text.split("|");
+      let title = "";
+      let recipient = "";
+      let amount = 0;
+      for (const part of parts) {
+        const cleanPart = part.trim();
+        if (cleanPart.toLowerCase().startsWith("title:")) {
+          title = cleanPart.substring(6).trim();
+        } else if (cleanPart.toLowerCase().startsWith("recipient:")) {
+          recipient = cleanPart.substring(10).trim();
+        } else if (cleanPart.toLowerCase().startsWith("amount:")) {
+          amount = parseFloat(cleanPart.substring(7).trim());
+        }
+      }
+      if (!title || !recipient || !amount) {
+        if (parts.length >= 3) {
+          title = parts[0].trim();
+          recipient = parts[1].trim();
+          amount = parseFloat(parts[2].trim());
+        }
+      }
+
+      let isValidAddress = false;
+      try {
+        const decoded = bs58.decode(recipient);
+        if (decoded.length === 32) {
+          isValidAddress = true;
+        }
+      } catch {}
+
+      if (!title || title.length < 5 || !isValidAddress || isNaN(amount) || amount <= 0) {
+        boboReply = "Invalid format, wallet address, or token amount, anon.\n\nFormat MUST be exactly: `Title: <title> | Recipient: <wallet> | Amount: <amount>`.\n\nMake sure the recipient is a valid Solana wallet address, title is at least 5 chars, and amount is > 0. Try again or type 'cancel'.";
+      } else {
+        state.title = title;
+        state.recipient = recipient;
+        state.amount = amount;
+        state.stage = 2;
+        proposalStates.set(userId, state);
+        boboReply = `Details logged:\n- Title: ${title}\n- Recipient: ${recipient}\n- Amount: ${amount.toLocaleString()} tokens\n\nBut you're not done, whale. To prevent spam and exit scams, you must survive the **Gauntlet of the Bear**.\n\nExplain why this proposal is not an exit scam in at least 10 words, but with a catch: **you cannot use the letter 'E' or 'e' anywhere in your defense.**\n\nGive me your defense, or type 'cancel' to bail.`;
+      }
+    } else if (state.stage === 2) {
+      const words = text.trim().split(/\s+/).filter(Boolean);
+      const wordCount = words.length;
+      const hasE = /[eE]/.test(text);
+
+      if (wordCount < 10) {
+        boboReply = `Pathetic. Your defense is too short (${wordCount} words). I demanded at least 10 words. Try again, or type 'cancel'.`;
+      } else if (hasE) {
+        boboReply = "FAIL! You used the letter 'E' or 'e'! I told you: ZERO occurrences of 'E'. Re-write your defense, or type 'cancel'.";
+      } else {
+        const nonce = crypto.randomBytes(8).toString("hex");
+        const challenge = `Bobo OS - Propose: ${state.title} to ${state.recipient} for ${state.amount} tokens. Nonce: ${nonce}`;
+        state.challenge = challenge;
+        state.stage = 3;
+        proposalStates.set(userId, state);
+
+        return res.json([{
+          text: `🔥 IMPRESSIVE. You survived the Gauntlet of the Bear. Your lipogram defense: "${text}" contains ${wordCount} words and zero 'E's.\n\nPlease sign the cryptographic challenge in your wallet to publish this proposal.`,
+          proposalChallenge: challenge,
+          proposalData: {
+            title: state.title,
+            recipient: state.recipient,
+            amount: state.amount
+          }
+        }]);
+      }
+    } else {
+      boboReply = "Waiting for your signature. Approve it in your wallet, or type 'cancel'.";
+    }
+  }
+  else if (text.trim().toLowerCase() === "propose" || text.trim().toLowerCase() === "new proposal" || text.trim().toLowerCase() === "create proposal") {
+    await verifyTokenHolding(user.solana_wallet!, userId);
+    const [refreshedUser] = await db.select().from(users).where(eq(users.user_id as any, userId as any) as any);
+    const bal = refreshedUser?.token_balance ?? 0;
+
+    if (bal <= 1000000) {
+      boboReply = `Only absolute gods holding strictly more than 1,000,000 $BobOS tokens can propose. You only hold ${bal.toLocaleString()} tokens. Go back to the trenches and buy more before trying to talk to me.`;
+    } else {
+      proposalStates.set(userId, { stage: 1 });
+      boboReply = "Welcome to the high table, whale. You own more than 1,000,000 $BobOS. You have the right to propose a treasury transfer.\n\nProvide the proposal details in this EXACT format:\n`Title: <title> | Recipient: <wallet> | Amount: <amount>`";
+    }
+  }
+  else if (/^vote\s+(yes|no)\s+on\s+(\S+)$/i.test(text.trim())) {
+    const voteMatch = text.trim().match(/^vote\s+(yes|no)\s+on\s+(\S+)$/i);
+    if (voteMatch) {
+      const voteVal = voteMatch[1].toLowerCase() as 'yes' | 'no';
+      const rawId = voteMatch[2].trim();
+
+      let proposal;
+      if (rawId.length === 36) {
+        [proposal] = await db.select().from(proposals).where(eq(proposals.id as any, rawId as any) as any);
+      } else {
+        const allProposals = await db.select().from(proposals);
+        proposal = allProposals.find((p: any) => p.id.startsWith(rawId));
+      }
+
+      if (!proposal) {
+        boboReply = `Could not find any active proposal matching "${rawId}". Type 'ledger' to see active proposals.`;
+      } else if (proposal.status !== "active") {
+        boboReply = `This proposal ("${proposal.title}") is no longer active.`;
+      } else {
+        const nonce = crypto.randomBytes(8).toString("hex");
+        const challenge = `Bobo OS - Vote: ${voteVal} on Proposal ${proposal.id}. Nonce: ${nonce}`;
+        voteStates.set(userId, {
+          proposalId: proposal.id,
+          vote: voteVal,
+          challenge
+        });
+
+        return res.json([{
+          text: `Confirming vote of ${voteVal.toUpperCase()} on "${proposal.title}". Please sign the cryptographic challenge in your wallet to record your vote.`,
+          voteChallenge: challenge,
+          voteData: {
+            proposalId: proposal.id,
+            vote: voteVal
+          }
+        }]);
+      }
+    } else {
+      boboReply = "Format to vote is: vote <yes|no> on <proposal_id>";
+    }
+  }
+  else if (text.trim().toLowerCase() === "ledger" || text.trim().toLowerCase() === "proposals" || text.trim().toLowerCase() === "show ledger") {
+    const activeProposals = await db.select().from(proposals).where(eq(proposals.status as any, "active" as any) as any);
+    if (activeProposals.length === 0) {
+      boboReply = "No active proposals in the ledger right now. The treasury is quiet... too quiet.";
+    } else {
+      let ledgerText = "═══ BOBO OS TREASURY LEDGER ═══\n\n";
+      for (const prop of activeProposals) {
+        const propVotes = await db.select().from(votes).where(eq(votes.proposal_id as any, prop.id as any) as any);
+        let yesWeight = 0;
+        let noWeight = 0;
+        for (const v of propVotes) {
+          if (v.vote === "yes") yesWeight += v.weight;
+          else if (v.vote === "no") noWeight += v.weight;
+        }
+        const total = yesWeight + noWeight;
+        const yesPct = total > 0 ? (yesWeight / total) * 100 : 0;
+        const noPct = total > 0 ? (noWeight / total) * 100 : 0;
+
+        // Create progress bar (20 chars wide)
+        const barWidth = 20;
+        const yesChars = Math.round((yesPct / 100) * barWidth);
+        const noChars = barWidth - yesChars;
+        const bar = "█".repeat(yesChars) + "░".repeat(noChars);
+
+        ledgerText += `ID: ${prop.id.substring(0, 8)}\n`;
+        ledgerText += `Title: ${prop.title}\n`;
+        ledgerText += `Recipient: ${prop.recipient.substring(0, 4)}...${prop.recipient.substring(prop.recipient.length - 4)}\n`;
+        ledgerText += `Amount: ${prop.amount.toLocaleString()} tokens\n`;
+        ledgerText += `Votes: YES ${yesWeight.toLocaleString()} (${yesPct.toFixed(1)}%) | NO ${noWeight.toLocaleString()} (${noPct.toFixed(1)}%)\n`;
+        ledgerText += `Progress: [${bar}]\n`;
+        if (prop.remarks) {
+          ledgerText += `Bobo's Remarks: "${prop.remarks}"\n`;
+        }
+        ledgerText += "───────────────────────────────\n";
+      }
+      ledgerText += "\nTo vote, type: vote <yes|no> on <id>";
+      boboReply = ledgerText;
+    }
+  }
   else {
     // ── Normal chat: generate Bobo's reply via Gemini ──────────────────────
     const history = getChatHistory(userId);

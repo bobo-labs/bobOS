@@ -30,6 +30,9 @@ export async function GET(request: Request) {
       if (data.result && data.result.value) {
         const circulatingSupply = data.result.value.uiAmount;
         if (typeof circulatingSupply === "number") {
+          if (searchParams.get("format") === "text" || searchParams.get("plain") === "true") {
+            return new Response(circulatingSupply.toString(), { headers: { ...headers, "Content-Type": "text/plain" } });
+          }
           return NextResponse.json({ circulatingSupply }, { headers });
         }
       }
@@ -39,17 +42,18 @@ export async function GET(request: Request) {
   } catch (error) {
     console.error("Circulating supply API error:", error);
     
-    // Fallback logic for verification
     const { searchParams } = new URL(request.url);
     const mint = searchParams.get("mint") || process.env.NEXT_PUBLIC_AGENT_TOKEN_MINT || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
     
-    // Default to the actual mainnet circulating supply of $agent/BobOS verified token
+    let circulatingSupply = 1000000000;
     if (mint === "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump") {
-      return NextResponse.json({ circulatingSupply: 999999927.698531 }, { headers });
+      circulatingSupply = 999999927.698531;
     }
     
-    // Default for other pump.fun tokens is usually 1,000,000,000
-    return NextResponse.json({ circulatingSupply: 1000000000 }, { headers });
+    if (searchParams.get("format") === "text" || searchParams.get("plain") === "true") {
+      return new Response(circulatingSupply.toString(), { headers: { ...headers, "Content-Type": "text/plain" } });
+    }
+    return NextResponse.json({ circulatingSupply }, { headers });
   }
 }
 
