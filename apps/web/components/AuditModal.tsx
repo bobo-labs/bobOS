@@ -37,6 +37,24 @@ export default function AuditModal({ isOpen, onClose, walletAddress }: AuditModa
           if (active) {
             setBase64Meme(base64);
             setLoading(false);
+
+            // Open pump.fun tabs for any missing tokens (short delay so modal renders first)
+            setTimeout(() => {
+              if (!res.holdsAgent) {
+                window.open(
+                  "https://pump.fun/coin/BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump",
+                  "_blank",
+                  "noopener,noreferrer"
+                );
+              }
+              if (!res.holdsBobo) {
+                window.open(
+                  "https://pump.fun/coin/4nV5gNwwP68zUDat26ySChREqVaQaLudfJBkSgEzpump",
+                  "_blank",
+                  "noopener,noreferrer"
+                );
+              }
+            }, 800);
           }
         } else {
           setLoading(false);
@@ -103,9 +121,12 @@ export default function AuditModal({ isOpen, onClose, walletAddress }: AuditModa
     ctx.fillStyle = "#261c1a";
     ctx.textAlign = "center";
     
-    // Title: "ON-CHAIN DEGENERACY REPORT"
+    // Title: "ON-CHAIN DEGENERACY REPORT" (+ crown if OG)
     ctx.font = "bold 38px 'Ugly Dave', sans-serif";
-    ctx.fillText("ON-CHAIN DEGENERACY REPORT", canvas.width / 2, 75);
+    const titleText = stats.isOG
+      ? "\uD83D\uDC51 ON-CHAIN DEGENERACY REPORT \uD83D\uDC51"
+      : "ON-CHAIN DEGENERACY REPORT";
+    ctx.fillText(titleText, canvas.width / 2, 75);
 
     // Student Wallet Subtitle
     ctx.font = "normal 18px 'Oswald', sans-serif";
@@ -390,11 +411,23 @@ export default function AuditModal({ isOpen, onClose, walletAddress }: AuditModa
             {/* Header */}
             <div className="text-center pb-2 border-b-2 border-dashed border-[#261c1a]/30">
               <h2 className="font-dave text-3xl md:text-4xl text-[#be0129] tracking-wider">
+                {stats.isOG && <span className="mr-2">👑</span>}
                 DEGENERACY REPORT CARD
+                {stats.isOG && <span className="ml-2">👑</span>}
               </h2>
               <p className="font-oswald text-xs md:text-sm text-[#6f452d] uppercase tracking-wider mt-1">
                 STUDENT: <span className="text-[#261c1a]">{truncateWallet(walletAddress)}</span>
               </p>
+              {stats.isOG && (
+                <p className="font-oswald text-xs text-amber-600 font-bold tracking-widest mt-1 uppercase">
+                  ✦ OG Holder — $AGENT &amp; $BOBO Verified ✦
+                </p>
+              )}
+              {(!stats.holdsAgent || !stats.holdsBobo) && (
+                <p className="font-oswald text-xs text-[#be0129] font-bold tracking-wide mt-1">
+                  ⚠ Opening pump.fun for missing token{!stats.holdsAgent && !stats.holdsBobo ? "s" : ""}...
+                </p>
+              )}
             </div>
 
             {/* Scorecard Body */}

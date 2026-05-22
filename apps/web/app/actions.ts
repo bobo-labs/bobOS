@@ -197,6 +197,12 @@ export async function getWalletDeGeneracyStats(walletAddress: string) {
   let totalTradesCount = 0;
   let hasMoreTrades = false;
 
+  // Token ownership flags (free — computed from balances we fetch anyway)
+  const agentMint = process.env.NEXT_PUBLIC_AGENT_TOKEN_MINT || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
+  const boboMint = process.env.NEXT_PUBLIC_BOBO_TOKEN_MINT || "4nV5gNwwP68zUDat26ySChREqVaQaLudfJBkSgEzpump";
+  let holdsAgent = false;
+  let holdsBobo = false;
+
   try {
     const apiKey = process.env.NEXT_PUBLIC_HELIUS_API_KEY || "8fa9ea58-61b4-4cce-a628-2e9af7c28659";
     const isDevnet = process.env.NEXT_PUBLIC_HELIUS_RPC_URL?.includes("devnet");
@@ -212,6 +218,10 @@ export async function getWalletDeGeneracyStats(walletAddress: string) {
         const data = await res.json();
         balances = data.balances || [];
         usingRealData = true;
+
+        // Check token ownership from the same balances response — zero extra credits
+        holdsAgent = balances.some(t => t.mint === agentMint && t.balance > 0);
+        holdsBobo = balances.some(t => t.mint === boboMint && t.balance > 0);
       }
     } catch (err) {
       console.error("Balances API error:", err);
@@ -328,6 +338,8 @@ export async function getWalletDeGeneracyStats(walletAddress: string) {
     memeUrl = "https://bobomemes.com/Images/bobo-the-bear-mcdonalds-worker-sad.webp";
   }
 
+  const isOG = holdsAgent && holdsBobo;
+
   return {
     success: true,
     walletAddress,
@@ -341,7 +353,10 @@ export async function getWalletDeGeneracyStats(walletAddress: string) {
       lifetimeTrades,
       winRate
     },
-    usingRealData
+    usingRealData,
+    holdsAgent,
+    holdsBobo,
+    isOG
   };
 }
 
