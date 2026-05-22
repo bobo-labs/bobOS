@@ -125,13 +125,8 @@ export default function AuditModal({ isOpen, onClose, walletAddress }: AuditModa
     ctx.font = "bold 38px 'Ugly Dave', sans-serif";
     ctx.fillText("ON-CHAIN DEGENERACY REPORT", canvas.width / 2, 75);
 
-    // Student Wallet Subtitle
-    ctx.font = "normal 18px 'Oswald', sans-serif";
-    ctx.fillStyle = "#6f452d";
-    ctx.fillText(`STUDENT WALLET: ${walletAddress}`, canvas.width / 2, 105);
-
-    // Divider line
-    drawWavyLine(40, 125, canvas.width - 40, 125, 2, "#261c1a");
+    // Divider line (moved up slightly since student wallet subtitle is removed)
+    drawWavyLine(40, 105, canvas.width - 40, 105, 2, "#261c1a");
 
     // 4. Draw Meme Image (Left Column)
     const imgX = 50;
@@ -155,12 +150,26 @@ export default function AuditModal({ isOpen, onClose, walletAddress }: AuditModa
       img.onload = () => {
         ctx.drawImage(img, imgX + 10, imgY + 10, imgW - 20, imgH - 20);
 
-        // Crown overlay on image top-right corner for OG holders
+        // Crown overlay on image top-right corner for OG holders (matching preview placement)
         if (stats.isOG) {
-          ctx.font = "52px serif";
-          ctx.textAlign = "right";
-          ctx.fillText("\uD83D\uDC51", imgX + imgW - 4, imgY + 52);
-          ctx.textAlign = "center"; // reset
+          ctx.save();
+          // Translate to the top-right corner of the image card
+          ctx.translate(imgX + imgW, imgY);
+          // Rotate 12 degrees
+          ctx.rotate((12 * Math.PI) / 180);
+          ctx.font = "54px serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+
+          // Match the drop-shadow filter of the JSX
+          ctx.shadowColor = "#261c1a";
+          ctx.shadowBlur = 0;
+          ctx.shadowOffsetX = 2;
+          ctx.shadowOffsetY = 3;
+
+          // Render the crown emoji offset slightly relative to the corner
+          ctx.fillText("👑", 10, -10);
+          ctx.restore();
         }
 
         resolve();
@@ -258,7 +267,7 @@ export default function AuditModal({ isOpen, onClose, walletAddress }: AuditModa
     ctx.fillStyle = "#6f452d";
     ctx.font = "bold 14px 'Oswald', sans-serif";
     ctx.textAlign = "left";
-    ctx.fillText("TEACHER REMARKS:", remarkX + 15, remarkY + 28);
+    ctx.fillText("BOBO REMARKS:", remarkX + 15, remarkY + 28);
 
     // Roast content (Ugly Dave Alternates font)
     ctx.fillStyle = "#261c1a";
@@ -419,12 +428,9 @@ export default function AuditModal({ isOpen, onClose, walletAddress }: AuditModa
               <h2 className="font-dave text-3xl md:text-4xl text-[#be0129] tracking-wider">
                 DEGENERACY REPORT CARD
               </h2>
-              <p className="font-oswald text-xs md:text-sm text-[#6f452d] uppercase tracking-wider mt-1">
-                STUDENT: <span className="text-[#261c1a]">{truncateWallet(walletAddress)}</span>
-              </p>
               {stats.isOG && (
                 <p className="font-oswald text-xs text-[#6f452d] font-bold tracking-widest mt-1 uppercase">
-                  ✦ OG Holder — $AGENT &amp; $BOBO Verified ✦
+                  ✦ OG Holder — $BobOS &amp; $BOBO verified ✦
                 </p>
               )}
               {(!stats.holdsAgent || !stats.holdsBobo) && (
@@ -518,7 +524,7 @@ export default function AuditModal({ isOpen, onClose, walletAddress }: AuditModa
               }}
             >
               <h4 className="font-oswald text-xs font-bold text-[#6f452d] tracking-wider uppercase mb-1">
-                TEACHER REMARKS:
+                BOBO REMARKS:
               </h4>
               <p className="font-dave-alt text-xl md:text-2xl text-[#261c1a] leading-relaxed">
                 "{stats.description}"
