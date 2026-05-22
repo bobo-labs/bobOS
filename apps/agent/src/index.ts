@@ -1066,21 +1066,21 @@ app.post("/:agentId/message", async (req, res) => {
     const existingVote = allProposalVotes.find((v: any) => v.voter_wallet === user.solana_wallet);
 
     if (existingVote) {
-      await db.update(votes)
-        .set({ vote: voteVal, weight, signature: signatureHex })
-        .where(eq(votes.id as any, existingVote.id as any) as any);
-    } else {
-      await db.insert(votes).values({
-        proposal_id: proposalId,
-        voter_wallet: user.solana_wallet!,
-        vote: voteVal,
-        weight,
-        signature: signatureHex
-      });
+      // Double safety net — wallet already voted, reject the signature attempt entirely
+      voteStates.delete(userId);
+      return res.json([{ text: `Your wallet already cast a ${existingVote.vote.toUpperCase()} vote on "${proposal.title}". That vote is permanent. The chain remembers even if you don't.` }]);
     }
 
+    await db.insert(votes).values({
+      proposal_id: proposalId,
+      voter_wallet: user.solana_wallet!,
+      vote: voteVal,
+      weight,
+      signature: signatureHex
+    });
+
     voteStates.delete(userId);
-    return res.json([{ text: `🗳️ VOTE RECORDED!\n\nYou voted ${voteVal.toUpperCase()} on "${proposal.title}" with a weight of ${weight.toLocaleString()} tokens.` }]);
+    return res.json([{ text: `🗳️ VOTE RECORDED!\n\nYou voted ${voteVal.toUpperCase()} on "${proposal.title}" with a weight of ${weight.toLocaleString()} tokens. Locked in. No takebacks.` }]);
   }
   else if (text === "[SYSTEM: TX_FAILED]") {
     bribeRetryState.set(userId, true);
@@ -1543,28 +1543,39 @@ Tell them in character that you couldn't find any active proposal matching that 
 Tell them in character that the proposal is already closed or inactive. Keep it under 2 sentences.`;
         boboReply = await callGemini(inactivePrompt, systemPrompt);
       } else {
-        const nonce = crypto.randomBytes(8).toString("hex");
-        const challenge = `Bobo OS - Vote: ${voteVal} on Proposal ${proposal.id}. Nonce: ${nonce}`;
-        voteStates.set(userId, {
-          proposalId: proposal.id,
-          vote: voteVal,
-          challenge
-        });
+        // Check if this wallet already voted on this proposal — permanently lock them out
+        const allExistingVotes = await db.select().from(votes).where(eq(votes.proposal_id as any, proposal.id as any) as any);
+        const alreadyVoted = allExistingVotes.find((v: any) => v.voter_wallet === user.solana_wallet);
 
-        const systemPrompt = getBoboSystemPrompt(user.token_balance, user.agent_memory);
-        const votePrompt = `The user wants to vote ${voteVal.toUpperCase()} on the proposal: "${proposal.title}".
+        if (alreadyVoted) {
+          const systemPrompt = getBoboSystemPrompt(user.token_balance, user.agent_memory);
+          const alreadyVotedPrompt = `The user already cast a ${alreadyVoted.vote.toUpperCase()} vote on the proposal "${proposal.title}" with a weight of ${alreadyVoted.weight?.toLocaleString() ?? '0'} tokens. Their wallet is locked in — no vote changes allowed, no matter what.
+Mock them in character for trying to weasel out of their commitment. Remind them that their wallet already spoke and that's final. Keep it under 2 sentences.`;
+          boboReply = await callGemini(alreadyVotedPrompt, systemPrompt);
+        } else {
+          const nonce = crypto.randomBytes(8).toString("hex");
+          const challenge = `Bobo OS - Vote: ${voteVal} on Proposal ${proposal.id}. Nonce: ${nonce}`;
+          voteStates.set(userId, {
+            proposalId: proposal.id,
+            vote: voteVal,
+            challenge
+          });
+
+          const systemPrompt = getBoboSystemPrompt(user.token_balance, user.agent_memory);
+          const votePrompt = `The user wants to vote ${voteVal.toUpperCase()} on the proposal: "${proposal.title}".
 Acknowledge their vote in character (cynical, funny, or respectful depending on their token balance of ${user.token_balance?.toLocaleString() ?? '0'}).
 Instruct them to sign the cryptographic challenge in their wallet to confirm and record their vote on-chain. Keep it short (under 3 sentences).`;
-        const voteText = await callGemini(votePrompt, systemPrompt);
+          const voteText = await callGemini(votePrompt, systemPrompt);
 
-        return res.json([{
-          text: voteText,
-          voteChallenge: challenge,
-          voteData: {
-            proposalId: proposal.id,
-            vote: voteVal
-          }
-        }]);
+          return res.json([{
+            text: voteText,
+            voteChallenge: challenge,
+            voteData: {
+              proposalId: proposal.id,
+              vote: voteVal
+            }
+          }]);
+        }
       }
     } else {
       boboReply = "Format to vote is: vote <yes|no> on <proposal_id>";
