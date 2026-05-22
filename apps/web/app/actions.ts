@@ -175,63 +175,142 @@ export async function getWalletDeGeneracyStats(walletAddress: string) {
   // 1. Generate seed/deterministic stats
   const hash = hashString(walletAddress);
   
-  // Deterministic values based on wallet hash
-  const lifetimeTrades = (hash % 380) + 20; // 20 to 400
+  // Deterministic values based on wallet hash (fallbacks)
+  const deterministicTrades = (hash % 380) + 20; // 20 to 400
   const deterministicGas = ((hash % 120) + (hash % 10) / 10 + 0.05); // 0.05 to 120.95 SOL
   const deterministicRugs = (hash % 15) + 1; // 1 to 16
   const deterministicJeetSwaps = (hash % 30) + 2; // 2 to 32 swaps
-  const winRate = (hash % 35) + 15; // 15% to 50%
+  const deterministicWinRate = (hash % 35) + 15; // 15% to 50%
 
   let gasSpent = parseFloat(deterministicGas.toFixed(4));
   let jeetIndex = deterministicJeetSwaps;
   let rugsTouched = deterministicRugs;
+  let winRate = deterministicWinRate;
+  let lifetimeTrades: string | number = deterministicTrades;
+  
   let grade = "C";
   let description = "Average degen. Buys high, sells low, but keeps some dignity.";
   let memeUrl = "https://bobomemes.com/Images/bobo-the-bear-eating-mcdonalds.webp";
 
-  // 2. Attempt to query Helius API for real transactions
-  let realTxCount = 0;
-  let realFees = 0;
-  let realSwaps = 0;
+  // 2. Attempt to query Helius API for real data
   let usingRealData = false;
+  let totalTradesCount = 0;
+  let hasMoreTrades = false;
 
   try {
     const apiKey = process.env.NEXT_PUBLIC_HELIUS_API_KEY || "8fa9ea58-61b4-4cce-a628-2e9af7c28659";
     const isDevnet = process.env.NEXT_PUBLIC_HELIUS_RPC_URL?.includes("devnet");
     const baseUrl = isDevnet ? "https://api-devnet.helius.xyz" : "https://api.helius.xyz";
-    const heliusUrl = `${baseUrl}/v0/addresses/${walletAddress}/transactions?api-key=${apiKey}&limit=20`;
+    const rpcUrl = process.env.NEXT_PUBLIC_HELIUS_RPC_URL || `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
 
-    const res = await fetch(heliusUrl);
-    if (res.ok) {
-      const txList = await res.json() as any[];
-      if (Array.isArray(txList) && txList.length > 0) {
+    // A. Fetch Balances
+    let balances: any[] = [];
+    try {
+      const balanceUrl = `${baseUrl}/v1/wallet/${walletAddress}/balances?api-key=${apiKey}`;
+      const res = await fetch(balanceUrl);
+      if (res.ok) {
+        const data = await res.json();
+        balances = data.balances || [];
         usingRealData = true;
-        realTxCount = txList.length;
-        txList.forEach(tx => {
-          if (tx.fee) {
-            realFees += tx.fee;
-          }
-          if (tx.type === "SWAP" || (tx.source && tx.source.toLowerCase() === "jupiter")) {
-            realSwaps++;
-          }
-        });
-
-        // Use real values to adjust/enrich the stats
-        // If they have swaps, make sure their Jeet Index is updated
-        jeetIndex = Math.max(jeetIndex, realSwaps);
-        
-        // Accumulate/scale gas spent
-        // Since we only fetched 20 txs, let's extrapolate or combine with seed
-        const sampleGas = realFees / 1e9;
-        gasSpent = parseFloat((sampleGas + (hash % 10) * 0.1).toFixed(4));
       }
+    } catch (err) {
+      console.error("Balances API error:", err);
+    }
+
+    // B. Fetch Signatures (first page, limit 1000) for exact trade counts
+    try {
+      const res = await fetch(rpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getSignaturesForAddress",
+          params: [walletAddress, { limit: 1000 }]
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.result) {
+          totalTradesCount = data.result.length;
+          if (totalTradesCount === 1000) {
+            hasMoreTrades = true;
+          }
+          usingRealData = true;
+        }
+      }
+    } catch (err) {
+      console.error("RPC getSignaturesForAddress error:", err);
+    }
+
+    // C. Fetch last 100 transactions for detailed swap & fee analysis
+    let realFees = 0;
+    let feePayingTxs = 0;
+    let realSwaps = 0;
+    try {
+      const txUrl = `${baseUrl}/v0/addresses/${walletAddress}/transactions?api-key=${apiKey}&limit=100`;
+      const res = await fetch(txUrl);
+      if (res.ok) {
+        const txs = await res.json();
+        if (Array.isArray(txs) && txs.length > 0) {
+          txs.forEach(tx => {
+            if (tx.feePayer === walletAddress) {
+              realFees += tx.fee || 0;
+              feePayingTxs++;
+            }
+            if (tx.type === "SWAP" || (tx.source && tx.source.toLowerCase() === "jupiter")) {
+              realSwaps++;
+            }
+          });
+          usingRealData = true;
+        }
+      }
+    } catch (err) {
+      console.error("Transactions API error:", err);
+    }
+
+    // D. Process real metrics if we successfully pulled data
+    if (usingRealData) {
+      lifetimeTrades = hasMoreTrades ? "1,000+" : `${totalTradesCount}`;
+
+      // Gas spent estimation based on average fee of last 100 transactions
+      const averageFee = feePayingTxs > 0 ? (realFees / feePayingTxs) : 8000; // default 8000 lamports
+      const tradesMultiplier = hasMoreTrades ? 1500 : totalTradesCount;
+      gasSpent = parseFloat(((averageFee / 1e9) * tradesMultiplier).toFixed(4));
+
+      // Scale swaps index to match trade scale
+      const scaledJeetIndex = realSwaps * (tradesMultiplier / 100);
+      jeetIndex = Math.max(Math.round(scaledJeetIndex), realSwaps);
+
+      // Rugs Touched: Balance > 0 but zero/low liquidity (null price or usd value)
+      const activeRugs = balances.filter(t => 
+        t.mint !== "So11111111111111111111111111111111111111111" && 
+        t.balance > 0 && 
+        (t.usdValue === null || t.pricePerToken === null || t.pricePerToken === 0)
+      ).length;
+      rugsTouched = activeRugs;
+
+      // Win Rate calculation based on profitable vs rugged holdings
+      const activeProfitableTokens = balances.filter(t => 
+        t.mint !== "So11111111111111111111111111111111111111111" && 
+        t.balance > 0 && 
+        t.usdValue > 0
+      ).length;
+
+      let calculatedWinRate = 35 + (activeProfitableTokens * 5) - (activeRugs * 3);
+      calculatedWinRate += (hash % 11) - 5;
+      winRate = Math.max(5, Math.min(95, calculatedWinRate));
     }
   } catch (e) {
     console.error("Helius stats fetch error, falling back to deterministic:", e);
   }
 
   // 3. Determine grade based on final calculated metrics
-  if (winRate >= 45) {
+  if (usingRealData && totalTradesCount === 0) {
+    grade = "N/A";
+    description = "A clean slate. No trades detected. Either you just created this wallet or you're too scared of the chain.";
+    memeUrl = "https://bobomemes.com/Images/bobo-the-bear-mcdonalds-worker-sad.webp";
+  } else if (winRate >= 45) {
     grade = hash % 2 === 0 ? "A+" : "A";
     description = "Cigar-smoking mastermind. Frontrunning bots and laughing all the way to the bank.";
     memeUrl = "https://bobomemes.com/Images/bobo-the-bear-smoking-cigar-3d-smug.webp";
