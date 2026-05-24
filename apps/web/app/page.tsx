@@ -59,9 +59,8 @@ export default function Home() {
   const leaderboardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Floating Buy Button repositioning logic
-  const [buyPos, setBuyPos] = useState({ x: 80, y: 15 });
+  const [buyPos, setBuyPos] = useState({ x: 80, y: 40 });
   const [buyKey, setBuyKey] = useState(0);
-  const [isBuyHovered, setIsBuyHovered] = useState(false);
 
   // Relocate function that calculates a safe position mathematically before rendering
   const relocateBuyButton = useCallback(() => {
@@ -79,27 +78,35 @@ export default function Home() {
       .filter(r => r.width > 0 && r.height > 0);
 
     let buttonWidth = 144;
+    let proposedY = 40;
+    
     if (typeof window !== 'undefined') {
-      if (window.innerWidth < 640) buttonWidth = 80;
-      else if (window.innerWidth < 768) buttonWidth = 112;
+      if (window.innerWidth < 640) {
+        buttonWidth = 80;
+        proposedY = Math.floor(Math.random() * 20) + 20; // 20px to 40px
+      } else if (window.innerWidth < 768) {
+        buttonWidth = 112;
+        proposedY = Math.floor(Math.random() * 30) + 25; // 25px to 55px
+      } else {
+        proposedY = Math.floor(Math.random() * 30) + 25; // 25px to 55px
+      }
     }
     const buttonHeight = buttonWidth * 0.5;
 
+    const isLeft = Math.random() < 0.5;
     let chosenX = 80;
-    let chosenY = 15;
+    let chosenY = proposedY;
 
     for (let attempt = 0; attempt < 50; attempt++) {
-      const isLeft = Math.random() < 0.5;
       let proposedX = 80;
       if (isLeft) {
-        proposedX = Math.floor(Math.random() * 18) + 8; // 8% to 25% (Left Header Area)
+        proposedX = Math.floor(Math.random() * 17) + 8; // 8% to 25% (Left Header Area)
       } else {
-        proposedX = Math.floor(Math.random() * 18) + 75; // 75% to 92% (Right Header Area)
+        proposedX = Math.floor(Math.random() * 17) + 75; // 75% to 92% (Right Header Area)
       }
-      const proposedY = Math.floor(Math.random() * 9) + 4; // 4% to 12% (Header Vertical Band)
 
       const proposedLeft = containerRect.left + (proposedX / 100) * containerRect.width;
-      const proposedTop = containerRect.top + (proposedY / 100) * containerRect.height;
+      const proposedTop = containerRect.top + proposedY;
 
       const proposedRect = {
         left: proposedLeft - buttonWidth / 2,
@@ -122,7 +129,6 @@ export default function Home() {
 
       if (!collided) {
         chosenX = proposedX;
-        chosenY = proposedY;
         break;
       }
     }
@@ -131,14 +137,6 @@ export default function Home() {
     setBuyKey(prev => prev + 1);
   }, []);
 
-  // Interval repositioning loop
-  useEffect(() => {
-    if (isBuyHovered) return;
-    const interval = setInterval(() => {
-      relocateBuyButton();
-    }, 4000);
-    return () => clearInterval(interval);
-  }, [isBuyHovered, relocateBuyButton]);
 
   // Layout changes (mount, chat open/close, complete, etc.) trigger relocation immediately
   useEffect(() => {
@@ -146,7 +144,7 @@ export default function Home() {
       relocateBuyButton();
     }, 100);
     return () => clearTimeout(timer);
-  }, [isChatOpen, completionTransitioned, userData, relocateBuyButton]);
+  }, [isChatOpen, completionTransitioned, relocateBuyButton]);
 
   const handleTributesMouseEnter = useCallback(async () => {
     if (leaderboardTimerRef.current) clearTimeout(leaderboardTimerRef.current);
@@ -973,12 +971,11 @@ export default function Home() {
           href="https://pump.fun/coin/BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump"
           target="_blank"
           rel="noopener noreferrer"
-          onMouseEnter={() => setIsBuyHovered(true)}
-          onMouseLeave={() => setIsBuyHovered(false)}
+          onAnimationEnd={relocateBuyButton}
           className="buy-button-animated absolute z-40 select-none cursor-pointer"
           style={{
             left: `${buyPos.x}%`,
-            top: `${buyPos.y}%`,
+            top: `${buyPos.y}px`,
             transform: 'translate(-50%, -50%)',
             textDecoration: 'none',
           }}
