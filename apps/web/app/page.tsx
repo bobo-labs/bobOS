@@ -63,61 +63,84 @@ export default function Home() {
   const [buyKey, setBuyKey] = useState(0);
   const [isBuyHovered, setIsBuyHovered] = useState(false);
 
-  useEffect(() => {
-    if (isBuyHovered) return;
-    const interval = setInterval(() => {
-      const newX = Math.floor(Math.random() * 85) + 5;
-      const newY = Math.floor(Math.random() * 85) + 5;
-      setBuyPos({ x: newX, y: newY });
-      setBuyKey(prev => prev + 1);
-    }, 4000);
-    return () => clearInterval(interval);
-  }, [isBuyHovered]);
-
-  const buyButtonRef = useRef<HTMLAnchorElement>(null);
-  const attemptsRef = useRef(0);
-
-  useEffect(() => {
-    const buttonEl = buyButtonRef.current;
-    if (!buttonEl || !containerRef.current) return;
-
-    const checkCollision = (rect1: DOMRect, rect2: DOMRect, padding = 15) => {
-      return !(
-        rect1.right < rect2.left - padding ||
-        rect1.left > rect2.right + padding ||
-        rect1.bottom < rect2.top - padding ||
-        rect1.top > rect2.bottom + padding
-      );
-    };
-
-    const buyRect = buttonEl.getBoundingClientRect();
-    let collided = false;
-
-    // Avoid interactive and text elements in the container
+  // Relocate function that calculates a safe position mathematically before rendering
+  const relocateBuyButton = useCallback(() => {
+    if (!containerRef.current) return;
+    const containerRect = containerRef.current.getBoundingClientRect();
+    
+    // Find targets to avoid
     const targets = containerRef.current.querySelectorAll(
       'button, input, h1, p, .custom-scroll, [role="button"], .tributes-dropdown, .wallet-adapter-button'
     );
+    // Filter out our own buy button element if it's there
+    const targetRects = Array.from(targets)
+      .filter(el => el.id !== 'buy-button-cta')
+      .map(el => el.getBoundingClientRect())
+      .filter(r => r.width > 0 && r.height > 0);
 
-    for (const target of Array.from(targets)) {
-      if (target === buttonEl || buttonEl.contains(target)) continue;
-      const targetRect = target.getBoundingClientRect();
-      if (targetRect.width === 0 || targetRect.height === 0) continue;
+    let buttonWidth = 144;
+    if (typeof window !== 'undefined') {
+      if (window.innerWidth < 640) buttonWidth = 80;
+      else if (window.innerWidth < 768) buttonWidth = 112;
+    }
+    const buttonHeight = buttonWidth * 0.5;
 
-      if (checkCollision(buyRect, targetRect, 15)) {
-        collided = true;
+    let chosenX = 80;
+    let chosenY = 15;
+
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const proposedX = Math.floor(Math.random() * 85) + 5;
+      const proposedY = Math.floor(Math.random() * 85) + 5;
+
+      const proposedLeft = containerRect.left + (proposedX / 100) * containerRect.width;
+      const proposedTop = containerRect.top + (proposedY / 100) * containerRect.height;
+
+      const proposedRect = {
+        left: proposedLeft - buttonWidth / 2,
+        right: proposedLeft + buttonWidth / 2,
+        top: proposedTop - buttonHeight / 2,
+        bottom: proposedTop + buttonHeight / 2,
+      };
+
+      let collided = false;
+      for (const rect2 of targetRects) {
+        // padding = 15px
+        if (!(proposedRect.right < rect2.left - 15 || 
+              proposedRect.left > rect2.right + 15 || 
+              proposedRect.bottom < rect2.top - 15 || 
+              proposedRect.top > rect2.bottom + 15)) {
+          collided = true;
+          break;
+        }
+      }
+
+      if (!collided) {
+        chosenX = proposedX;
+        chosenY = proposedY;
         break;
       }
     }
 
-    if (collided && attemptsRef.current < 30) {
-      attemptsRef.current += 1;
-      const newX = Math.floor(Math.random() * 85) + 5;
-      const newY = Math.floor(Math.random() * 85) + 5;
-      setBuyPos({ x: newX, y: newY });
-    } else {
-      attemptsRef.current = 0;
-    }
-  }, [buyPos, buyKey, isChatOpen, completionTransitioned, userData]);
+    setBuyPos({ x: chosenX, y: chosenY });
+    setBuyKey(prev => prev + 1);
+  }, []);
+
+  // Interval repositioning loop
+  useEffect(() => {
+    if (isBuyHovered) return;
+    const interval = setInterval(() => {
+      relocateBuyButton();
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [isBuyHovered, relocateBuyButton]);
+
+  // Layout changes (mount, chat open/close, complete, etc.) trigger relocation immediately
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      relocateBuyButton();
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [isChatOpen, completionTransitioned, userData, relocateBuyButton]);
 
   const handleTributesMouseEnter = useCallback(async () => {
     if (leaderboardTimerRef.current) clearTimeout(leaderboardTimerRef.current);
@@ -939,7 +962,7 @@ export default function Home() {
 
         {/* Floating Buy CTA button */}
         <a
-          ref={buyButtonRef}
+          id="buy-button-cta"
           key={buyKey}
           href="https://pump.fun/coin/BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump"
           target="_blank"
