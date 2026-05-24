@@ -277,3 +277,42 @@ body {
   visibility: visible;
   pointer-events: auto;
 }
+
+/* ─── Animated Buy $BOBO CTA Button ────────────────────────────────────── */
+@keyframes inflate-pop {
+  0% {
+    transform: scale(1) rotate(0deg);
+  }
+  35% {
+    transform: scale(1.05) rotate(-1deg);
+  }
+  50% {
+    transform: scale(0.96) rotate(1deg);
+  }
+  65% {
+    transform: scale(1.03) rotate(-0.5deg);
+  }
+  80% {
+    transform: scale(0.98) rotate(0.5deg);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+.bobo-cta-button {
+  animation: inflate-pop 4s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.bobo-cta-button:hover {
+  animation-play-state: paused;
+  transform: scale(1.03) translateY(-1px) !important;
+  background-color: #00ff66 !important;
+  box-shadow: 6px 6px 0px 0px var(--color-pitch-black) !important;
+}
+
+.bobo-cta-button:active {
+  transform: scale(0.97) translateY(1px) !important;
+  box-shadow: 2px 2px 0px 0px var(--color-pitch-black) !important;
+}

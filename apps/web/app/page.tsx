@@ -710,6 +710,16 @@ export default function Home() {
                   </div>
                 </div>
 
+                <a
+                  href="https://pump.fun/coin/BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="bobo-cta-button flex-shrink-0 w-full text-center bg-[#47d175] text-[#261c1a] py-3 px-4 border-[3px] border-[#261c1a] sketch-border font-dave text-xl md:text-2xl lg:text-3xl uppercase tracking-wider shadow-[4px_4px_0_0_#261c1a] transition-all duration-100 cursor-pointer flex items-center justify-center gap-2 select-none"
+                  style={{ textDecoration: 'none' }}
+                >
+                  <span>💊 BUY $BOBO ON PUMP.FUN 📈</span>
+                </a>
+
                 {/*
                   KEY FIX: Split into two divs.
                   Outer: owns the border + border-radius + overflow:hidden → clips the
