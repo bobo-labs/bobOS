@@ -57,10 +57,11 @@ export default function Home() {
   const [leaderboard, setLeaderboard] = useState<{ rank: number; wallet: string; roasts_count: number }[]>([]);
   const [leaderboardLoaded, setLeaderboardLoaded] = useState(false);
   const leaderboardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+  
   // Floating Buy Button repositioning logic
   const [buyPos, setBuyPos] = useState({ x: 80, y: 40 });
   const [buyKey, setBuyKey] = useState(0);
+  const lastSideRef = useRef<'left' | 'right'>('right');
 
   // Relocate function that calculates a safe position mathematically before rendering
   const relocateBuyButton = useCallback(() => {
@@ -89,13 +90,15 @@ export default function Home() {
       }
     }
 
-    const isLeft = Math.random() < 0.5;
-    let chosenX = 80;
+    const nextSide = lastSideRef.current === 'left' ? 'right' : 'left';
+    let chosenX = nextSide === 'left' ? 15 : 80;
     let chosenY = proposedY;
+    let found = false;
 
+    // Attempt 1: Try the opposite side
     for (let attempt = 0; attempt < 50; attempt++) {
       let proposedX = 80;
-      if (isLeft) {
+      if (nextSide === 'left') {
         proposedX = Math.floor(Math.random() * 17) + 8; // 8% to 25% (Left Header Area)
       } else {
         proposedX = Math.floor(Math.random() * 17) + 75; // 75% to 92% (Right Header Area)
@@ -125,7 +128,49 @@ export default function Home() {
 
       if (!collided) {
         chosenX = proposedX;
+        lastSideRef.current = nextSide;
+        found = true;
         break;
+      }
+    }
+
+    // Attempt 2: Fallback to the same side if the opposite side is blocked
+    if (!found) {
+      const fallbackSide = lastSideRef.current;
+      for (let attempt = 0; attempt < 50; attempt++) {
+        let proposedX = 80;
+        if (fallbackSide === 'left') {
+          proposedX = Math.floor(Math.random() * 17) + 8;
+        } else {
+          proposedX = Math.floor(Math.random() * 17) + 75;
+        }
+
+        const proposedLeft = containerRect.left + (proposedX / 100) * containerRect.width;
+        const proposedTop = containerRect.top + proposedY;
+
+        const proposedRect = {
+          left: proposedLeft - buttonWidth / 2,
+          right: proposedLeft + buttonWidth / 2,
+          top: proposedTop - buttonHeight / 2,
+          bottom: proposedTop + buttonHeight / 2,
+        };
+
+        let collided = false;
+        for (const rect2 of targetRects) {
+          if (!(proposedRect.right < rect2.left - 15 || 
+                proposedRect.left > rect2.right + 15 || 
+                proposedRect.bottom < rect2.top - 15 || 
+                proposedRect.top > rect2.bottom + 15)) {
+            collided = true;
+            break;
+          }
+        }
+
+        if (!collided) {
+          chosenX = proposedX;
+          found = true;
+          break;
+        }
       }
     }
 
