@@ -58,6 +58,22 @@ export default function Home() {
   const [leaderboardLoaded, setLeaderboardLoaded] = useState(false);
   const leaderboardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Floating Buy Button repositioning logic
+  const [buyPos, setBuyPos] = useState({ x: 80, y: 15 });
+  const [buyKey, setBuyKey] = useState(0);
+  const [isBuyHovered, setIsBuyHovered] = useState(false);
+
+  useEffect(() => {
+    if (isBuyHovered) return;
+    const interval = setInterval(() => {
+      const newX = Math.floor(Math.random() * 85) + 5;
+      const newY = Math.floor(Math.random() * 85) + 5;
+      setBuyPos({ x: newX, y: newY });
+      setBuyKey(prev => prev + 1);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [isBuyHovered]);
+
   const handleTributesMouseEnter = useCallback(async () => {
     if (leaderboardTimerRef.current) clearTimeout(leaderboardTimerRef.current);
     setShowLeaderboard(true);
@@ -710,16 +726,6 @@ export default function Home() {
                   </div>
                 </div>
 
-                <a
-                  href="https://pump.fun/coin/BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="bobo-cta-button flex-shrink-0 w-full text-center bg-[#47d175] text-[#261c1a] py-3 px-4 border-[3px] border-[#261c1a] sketch-border font-dave text-xl md:text-2xl lg:text-3xl uppercase tracking-wider shadow-[4px_4px_0_0_#261c1a] transition-all duration-100 cursor-pointer flex items-center justify-center gap-2 select-none"
-                  style={{ textDecoration: 'none' }}
-                >
-                  <span>💊 BUY $BOBO ON PUMP.FUN 📈</span>
-                </a>
-
                 {/*
                   KEY FIX: Split into two divs.
                   Outer: owns the border + border-radius + overflow:hidden → clips the
@@ -885,6 +891,29 @@ export default function Home() {
 
           </div>
         )}
+
+        {/* Floating Buy CTA button */}
+        <a
+          key={buyKey}
+          href="https://pump.fun/coin/BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump"
+          target="_blank"
+          rel="noopener noreferrer"
+          onMouseEnter={() => setIsBuyHovered(true)}
+          onMouseLeave={() => setIsBuyHovered(false)}
+          className="buy-button-animated absolute z-40 select-none cursor-pointer"
+          style={{
+            left: `${buyPos.x}%`,
+            top: `${buyPos.y}%`,
+            transform: 'translate(-50%, -50%)',
+            textDecoration: 'none',
+          }}
+        >
+          <img
+            src="/images/buy-button.webp"
+            alt="Buy $BOBO"
+            className="w-20 sm:w-28 md:w-36 h-auto hover:scale-110 active:scale-95 transition-transform duration-150 drop-shadow-[0_4px_8px_rgba(38,28,26,0.35)]"
+          />
+        </a>
       </div>
 
       {connected && publicKey && (

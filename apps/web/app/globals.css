@@ -278,41 +278,35 @@ body {
   pointer-events: auto;
 }
 
-/* ─── Animated Buy $BOBO CTA Button ────────────────────────────────────── */
-@keyframes inflate-pop {
+/* ─── Floating Buy $BOBO CTA Button ────────────────────────────────────── */
+@keyframes buy-button-lifecycle {
   0% {
-    transform: scale(1) rotate(0deg);
+    opacity: 0;
+    transform: scale(0.3) translate(-50%, -50%);
   }
-  35% {
-    transform: scale(1.05) rotate(-1deg);
+  25% { /* 1s fade-in (1s of 4s) */
+    opacity: 1;
+    transform: scale(1.05) translate(-50%, -50%);
   }
-  50% {
-    transform: scale(0.96) rotate(1deg);
+  30% { /* settle to scale(1) */
+    opacity: 1;
+    transform: scale(1) translate(-50%, -50%);
   }
-  65% {
-    transform: scale(1.03) rotate(-0.5deg);
+  75% { /* stays at 100% for 2s (from 1.2s to 3s) */
+    opacity: 1;
+    transform: scale(1) translate(-50%, -50%);
   }
-  80% {
-    transform: scale(0.98) rotate(0.5deg);
-  }
-  100% {
-    transform: scale(1) rotate(0deg);
+  100% { /* 1s scale down and disappear (from 3s to 4s) */
+    opacity: 0;
+    transform: scale(0) translate(-50%, -50%);
   }
 }
 
-.bobo-cta-button {
-  animation: inflate-pop 4s ease-in-out infinite;
-  transform-origin: center;
+.buy-button-animated {
+  animation: buy-button-lifecycle 4s forwards;
 }
 
-.bobo-cta-button:hover {
+.buy-button-animated:hover {
   animation-play-state: paused;
-  transform: scale(1.03) translateY(-1px) !important;
-  background-color: #00ff66 !important;
-  box-shadow: 6px 6px 0px 0px var(--color-pitch-black) !important;
-}
-
-.bobo-cta-button:active {
-  transform: scale(0.97) translateY(1px) !important;
-  box-shadow: 2px 2px 0px 0px var(--color-pitch-black) !important;
+  filter: drop-shadow(0 0 12px rgba(249, 202, 113, 0.8));
 }
