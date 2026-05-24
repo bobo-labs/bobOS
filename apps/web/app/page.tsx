@@ -74,6 +74,51 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [isBuyHovered]);
 
+  const buyButtonRef = useRef<HTMLAnchorElement>(null);
+  const attemptsRef = useRef(0);
+
+  useEffect(() => {
+    const buttonEl = buyButtonRef.current;
+    if (!buttonEl || !containerRef.current) return;
+
+    const checkCollision = (rect1: DOMRect, rect2: DOMRect, padding = 15) => {
+      return !(
+        rect1.right < rect2.left - padding ||
+        rect1.left > rect2.right + padding ||
+        rect1.bottom < rect2.top - padding ||
+        rect1.top > rect2.bottom + padding
+      );
+    };
+
+    const buyRect = buttonEl.getBoundingClientRect();
+    let collided = false;
+
+    // Avoid interactive and text elements in the container
+    const targets = containerRef.current.querySelectorAll(
+      'button, input, h1, p, .custom-scroll, [role="button"], .tributes-dropdown, .wallet-adapter-button'
+    );
+
+    for (const target of Array.from(targets)) {
+      if (target === buttonEl || buttonEl.contains(target)) continue;
+      const targetRect = target.getBoundingClientRect();
+      if (targetRect.width === 0 || targetRect.height === 0) continue;
+
+      if (checkCollision(buyRect, targetRect, 15)) {
+        collided = true;
+        break;
+      }
+    }
+
+    if (collided && attemptsRef.current < 30) {
+      attemptsRef.current += 1;
+      const newX = Math.floor(Math.random() * 85) + 5;
+      const newY = Math.floor(Math.random() * 85) + 5;
+      setBuyPos({ x: newX, y: newY });
+    } else {
+      attemptsRef.current = 0;
+    }
+  }, [buyPos, buyKey, isChatOpen, completionTransitioned, userData]);
+
   const handleTributesMouseEnter = useCallback(async () => {
     if (leaderboardTimerRef.current) clearTimeout(leaderboardTimerRef.current);
     setShowLeaderboard(true);
@@ -894,6 +939,7 @@ export default function Home() {
 
         {/* Floating Buy CTA button */}
         <a
+          ref={buyButtonRef}
           key={buyKey}
           href="https://pump.fun/coin/BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump"
           target="_blank"
