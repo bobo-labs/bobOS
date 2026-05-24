@@ -70,7 +70,7 @@ export default function Home() {
     
     // Find targets to avoid
     const targets = containerRef.current.querySelectorAll(
-      'button, input, h1, p, .custom-scroll, [role="button"], .tributes-dropdown, .wallet-adapter-button'
+      'button, input, .tributes-dropdown, .wallet-adapter-button, [role="button"]'
     );
     // Filter out our own buy button element if it's there
     const targetRects = Array.from(targets)
