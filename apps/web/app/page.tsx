@@ -89,8 +89,14 @@ export default function Home() {
     let chosenY = 15;
 
     for (let attempt = 0; attempt < 50; attempt++) {
-      const proposedX = Math.floor(Math.random() * 85) + 5;
-      const proposedY = Math.floor(Math.random() * 85) + 5;
+      const isLeft = Math.random() < 0.5;
+      let proposedX = 80;
+      if (isLeft) {
+        proposedX = Math.floor(Math.random() * 18) + 8; // 8% to 25% (Left Header Area)
+      } else {
+        proposedX = Math.floor(Math.random() * 18) + 75; // 75% to 92% (Right Header Area)
+      }
+      const proposedY = Math.floor(Math.random() * 9) + 4; // 4% to 12% (Header Vertical Band)
 
       const proposedLeft = containerRect.left + (proposedX / 100) * containerRect.width;
       const proposedTop = containerRect.top + (proposedY / 100) * containerRect.height;
