@@ -77,21 +77,17 @@ export default function Home() {
       .map(el => el.getBoundingClientRect())
       .filter(r => r.width > 0 && r.height > 0);
 
-    let buttonWidth = 144;
+    const buttonWidth = 84;
+    const buttonHeight = 56;
     let proposedY = 40;
     
     if (typeof window !== 'undefined') {
       if (window.innerWidth < 640) {
-        buttonWidth = 80;
         proposedY = Math.floor(Math.random() * 20) + 20; // 20px to 40px
-      } else if (window.innerWidth < 768) {
-        buttonWidth = 112;
-        proposedY = Math.floor(Math.random() * 30) + 25; // 25px to 55px
       } else {
         proposedY = Math.floor(Math.random() * 30) + 25; // 25px to 55px
       }
     }
-    const buttonHeight = buttonWidth * 0.5;
 
     const isLeft = Math.random() < 0.5;
     let chosenX = 80;
@@ -983,7 +979,7 @@ export default function Home() {
           <img
             src="/images/buy-button.webp"
             alt="Buy $BOBO"
-            className="w-20 sm:w-28 md:w-36 h-auto hover:scale-110 active:scale-95 transition-transform duration-150 drop-shadow-[0_4px_8px_rgba(38,28,26,0.35)]"
+            className="w-[84px] h-[56px] hover:scale-110 active:scale-95 transition-transform duration-150 drop-shadow-[0_4px_8px_rgba(38,28,26,0.35)]"
           />
         </a>
       </div>
