@@ -22,6 +22,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import nacl from "tweetnacl";
 import bs58 from "bs58";
+import { configureApi, api } from "@coin-communities/sdk";
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,6 +37,24 @@ app.use(cors({
   ]
 }));
 app.use(express.json());
+
+// ─── Configure Coin Communities SDK ─────────────────────────────────────────
+const ccServerKey = process.env.CC_SERVER_KEY || "";
+const ccServerSecret = process.env.CC_SERVER_SECRET || "";
+
+if (ccServerKey && ccServerSecret) {
+  configureApi({
+    baseUrl: "https://api.coin-communities.xyz",
+    headers: {
+      "x-server-key": ccServerKey,
+      "x-server-secret": ccServerSecret,
+    },
+  });
+  console.log("[COIN_COMMUNITIES] SDK configured successfully.");
+} else {
+  console.warn("[COIN_COMMUNITIES] Warning: CC_SERVER_KEY or CC_SERVER_SECRET is missing. Forwarder will be inactive.");
+}
+
 
 // ─── Stable agent descriptor ────────────────────────────────────────────────
 const AGENT = {
@@ -902,6 +922,72 @@ function extractBribeAmount(text: string): number | null {
 app.get("/", (_req, res) => {
   res.send("Bobo the Bear is live.");
 });
+
+// Webhook endpoint to receive new tweets from Make.com/Zapier and forward to Coin Communities
+app.post("/api/forward-tweet", async (req, res) => {
+  try {
+    const { twitterId, tweetText, tweetId, walletAddress, chainId } = req.body as {
+      twitterId?: string;
+      tweetText?: string;
+      tweetId?: string;
+      walletAddress?: string;
+      chainId?: "solana" | "ethereum" | "base" | "bsc";
+    };
+
+    const webhookSecret = req.headers["x-webhook-secret"];
+    const expectedSecret = process.env.TWEET_FORWARDER_SECRET;
+
+    if (!expectedSecret || webhookSecret !== expectedSecret) {
+      console.warn(`[FORWARDER] Unauthorized access attempt from IP ${req.ip}`);
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    if (!twitterId || !tweetText || !tweetId) {
+      return res.status(400).json({ error: "Missing required parameters" });
+    }
+
+    // Extract numeric tweet ID if a full URL was passed
+    let parsedTweetId = tweetId.trim();
+    if (parsedTweetId.includes("/status/")) {
+      const match = parsedTweetId.match(/\/status\/(\d+)/);
+      if (match && match[1]) {
+        parsedTweetId = match[1];
+      }
+    }
+
+    const tokenAddress = process.env.CC_TOKEN_ADDRESS || process.env.AGENT_TOKEN_MINT || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
+    const finalChainId = chainId || "solana";
+    const finalWalletAddress = walletAddress || process.env.AGENT_WALLET_ADDRESS || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
+
+    console.log(`[FORWARDER] Forwarding tweet ${parsedTweetId} on behalf of Twitter ID ${twitterId} to room ${tokenAddress}`);
+
+    // Format content with original tweet link
+    const formattedContent = `${tweetText}\n\n🔗 Original tweet: https://x.com/i/web/status/${parsedTweetId}`;
+
+    // Call Coin Communities Server API to post the message on behalf of the user
+    const response = await api.postMessageServer({
+      path: { token_address: tokenAddress },
+      body: {
+        content: formattedContent,
+        twitterId: twitterId,
+        chainId: finalChainId,
+        walletAddress: finalWalletAddress,
+      },
+    });
+
+    if (response.error) {
+      console.error("[FORWARDER] Coin Communities API error:", response.error);
+      return res.status(500).json({ error: "Coin Communities API error", details: response.error });
+    }
+
+    return res.json({ success: true, message: "Tweet forwarded successfully to Coin Communities" });
+  } catch (error: any) {
+    console.error("[FORWARDER] Internal server error:", error);
+    return res.status(500).json({ error: "Internal server error", message: error?.message });
+  }
+});
+
+
 
 // List agents — same shape frontend expects
 app.get("/agents", (_req, res) => {
