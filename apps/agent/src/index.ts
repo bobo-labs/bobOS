@@ -959,6 +959,7 @@ app.post("/api/forward-tweet", async (req, res) => {
     const finalChainId = chainId || "solana";
     const finalWalletAddress = walletAddress || process.env.AGENT_WALLET_ADDRESS || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
 
+    console.log(`[FORWARDER] Received request body:`, JSON.stringify(req.body));
     console.log(`[FORWARDER] Forwarding tweet ${parsedTweetId} on behalf of Twitter ID ${twitterId} to room ${tokenAddress}`);
 
     // Format content with original tweet link
@@ -969,7 +970,7 @@ app.post("/api/forward-tweet", async (req, res) => {
     let response;
 
     if (userAccessToken) {
-      console.log(`[FORWARDER] Using user access token for client-side posting to room ${tokenAddress}`);
+      console.log(`[FORWARDER] Using user access token for client-side posting to room ${tokenAddress} with wallet ${finalWalletAddress} (${finalChainId})`);
       configureApi({
         baseUrl: "https://api.coin-communities.xyz",
         headers: {
