@@ -964,16 +964,48 @@ app.post("/api/forward-tweet", async (req, res) => {
     // Format content with original tweet link
     const formattedContent = `${tweetText}\n\n🔗 Original tweet: https://x.com/i/web/status/${parsedTweetId}`;
 
-    // Call Coin Communities Server API to post the message on behalf of the user
-    const response = await api.postMessageServer({
-      path: { token_address: tokenAddress },
-      body: {
-        content: formattedContent,
-        twitterId: twitterId,
-        chainId: finalChainId,
-        walletAddress: finalWalletAddress,
-      },
-    });
+    // Determine whether to use client-side api.postMessage (via USER_ACCESS_TOKEN) or server-side api.postMessageServer
+    const userAccessToken = process.env.USER_ACCESS_TOKEN;
+    let response;
+
+    if (userAccessToken) {
+      console.log(`[FORWARDER] Using user access token for client-side posting to room ${tokenAddress}`);
+      configureApi({
+        baseUrl: "https://api.coin-communities.xyz",
+        auth: () => userAccessToken,
+      });
+
+      response = await api.postMessage({
+        path: { token_address: tokenAddress },
+        body: {
+          content: formattedContent,
+          chainId: finalChainId,
+          walletAddress: finalWalletAddress,
+        },
+      });
+
+      // Restore server credentials afterwards
+      if (ccServerKey && ccServerSecret) {
+        configureApi({
+          baseUrl: "https://api.coin-communities.xyz",
+          headers: {
+            "x-server-key": ccServerKey,
+            "x-server-secret": ccServerSecret,
+          },
+        });
+      }
+    } else {
+      console.log(`[FORWARDER] Using server credentials to post to room ${tokenAddress}`);
+      response = await api.postMessageServer({
+        path: { token_address: tokenAddress },
+        body: {
+          content: formattedContent,
+          twitterId: twitterId,
+          chainId: finalChainId,
+          walletAddress: finalWalletAddress,
+        },
+      });
+    }
 
     if (response.error) {
       console.error("[FORWARDER] Coin Communities API error:", response.error);
