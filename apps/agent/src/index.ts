@@ -972,6 +972,9 @@ app.post("/api/forward-tweet", async (req, res) => {
       console.log(`[FORWARDER] Using user access token for client-side posting to room ${tokenAddress}`);
       configureApi({
         baseUrl: "https://api.coin-communities.xyz",
+        headers: {
+          "x-api-key": process.env.CC_API_KEY || "",
+        },
         auth: () => userAccessToken,
       });
 
