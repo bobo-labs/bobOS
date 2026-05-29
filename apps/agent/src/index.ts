@@ -975,8 +975,8 @@ app.post("/api/forward-tweet", async (req, res) => {
         baseUrl: "https://api.coin-communities.xyz",
         headers: {
           "x-api-key": process.env.CC_API_KEY || "",
-        },
-        auth: () => userAccessToken,
+          "Authorization": `Bearer ${userAccessToken.trim()}`
+        }
       });
 
       // Query and log linked wallets to diagnose mismatches
