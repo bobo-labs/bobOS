@@ -982,9 +982,46 @@ app.post("/api/forward-tweet", async (req, res) => {
       // Query and log linked wallets to diagnose mismatches
       try {
         const walletsRes = await api.getWallets({});
-        console.log(`[FORWARDER] Linked wallets returned by API:`, JSON.stringify(walletsRes.data));
+        console.log(`[FORWARDER] Linked wallets returned by SDK:`, JSON.stringify(walletsRes.data));
       } catch (err) {
-        console.error(`[FORWARDER] Failed to fetch linked wallets:`, err);
+        console.error(`[FORWARDER] Failed to fetch linked wallets via SDK:`, err);
+      }
+
+      // Query and log user profile via SDK
+      try {
+        const meRes = await api.userMe({});
+        console.log(`[FORWARDER] User Profile returned by SDK:`, JSON.stringify(meRes.data));
+      } catch (err) {
+        console.error(`[FORWARDER] Failed to fetch user profile via SDK:`, err);
+      }
+
+      // Query raw fetch to compare headers/responses
+      try {
+        const rawMeRes = await fetch("https://api.coin-communities.xyz/api/v1/users/me", {
+          headers: {
+            "x-api-key": process.env.CC_API_KEY || "",
+            "Authorization": `Bearer ${userAccessToken.trim()}`
+          }
+        });
+        console.log(`[FORWARDER] Raw fetch userMe status: ${rawMeRes.status}`);
+        const rawMeText = await rawMeRes.text();
+        console.log(`[FORWARDER] Raw fetch userMe response:`, rawMeText);
+      } catch (err) {
+        console.error(`[FORWARDER] Raw fetch userMe failed:`, err);
+      }
+
+      try {
+        const rawWalletsRes = await fetch("https://api.coin-communities.xyz/api/v1/users/me/wallets", {
+          headers: {
+            "x-api-key": process.env.CC_API_KEY || "",
+            "Authorization": `Bearer ${userAccessToken.trim()}`
+          }
+        });
+        console.log(`[FORWARDER] Raw fetch wallets status: ${rawWalletsRes.status}`);
+        const rawWalletsText = await rawWalletsRes.text();
+        console.log(`[FORWARDER] Raw fetch wallets response:`, rawWalletsText);
+      } catch (err) {
+        console.error(`[FORWARDER] Raw fetch wallets failed:`, err);
       }
 
       response = await api.postMessage({
