@@ -979,6 +979,14 @@ app.post("/api/forward-tweet", async (req, res) => {
         auth: () => userAccessToken,
       });
 
+      // Query and log linked wallets to diagnose mismatches
+      try {
+        const walletsRes = await api.getWallets({});
+        console.log(`[FORWARDER] Linked wallets returned by API:`, JSON.stringify(walletsRes.data));
+      } catch (err) {
+        console.error(`[FORWARDER] Failed to fetch linked wallets:`, err);
+      }
+
       response = await api.postMessage({
         path: { token_address: tokenAddress },
         body: {
