@@ -1031,7 +1031,564 @@ app.post("/api/forward-tweet", async (req, res) => {
   }
 });
 
+// serving local interactive HTML page for linking developer wallets securely
+app.get("/link-wallet", (_req, res) => {
+  res.setHeader("Content-Type", "text/html");
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Link Wallet to Coin Communities</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Space+Mono&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0B0D17;
+      --card-bg: rgba(255, 255, 255, 0.03);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --text: #F3F4F6;
+      --text-muted: #9CA3AF;
+      --primary: #9333EA;
+      --primary-hover: #A855F7;
+      --accent: #22D3EE;
+      --success: #10B981;
+      --error: #EF4444;
+    }
+    
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: 'Outfit', sans-serif;
+      background: var(--bg);
+      background-image: 
+        radial-gradient(circle at 10% 20%, rgba(147, 51, 234, 0.1) 0%, transparent 40%),
+        radial-gradient(circle at 90% 80%, rgba(34, 211, 238, 0.08) 0%, transparent 40%);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    
+    .container {
+      max-width: 550px;
+      width: 100%;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      backdrop-filter: blur(16px);
+      border-radius: 24px;
+      padding: 3rem 2.5rem;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+      animation: fadeIn 0.8s ease-out;
+    }
+    
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    
+    h1 {
+      font-size: 2.25rem;
+      font-weight: 800;
+      text-align: center;
+      margin-bottom: 0.75rem;
+      background: linear-gradient(135deg, #FFF 30%, var(--accent) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    
+    .subtitle {
+      font-size: 1rem;
+      color: var(--text-muted);
+      text-align: center;
+      margin-bottom: 2.5rem;
+      line-height: 1.5;
+    }
+    
+    .step-card {
+      background: rgba(255, 255, 255, 0.015);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      border-radius: 16px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      transition: all 0.3s ease;
+    }
+    
+    .step-card.active {
+      border-color: rgba(147, 51, 234, 0.4);
+      background: rgba(147, 51, 234, 0.02);
+      box-shadow: 0 0 20px rgba(147, 51, 234, 0.05);
+    }
+    
+    .step-header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 0.75rem;
+    }
+    
+    .step-number {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 0.875rem;
+      color: var(--text-muted);
+    }
+    
+    .step-card.active .step-number {
+      background: var(--primary);
+      color: white;
+    }
+    
+    .step-title {
+      font-size: 1.125rem;
+      font-weight: 600;
+    }
+    
+    .step-desc {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      line-height: 1.4;
+      margin-bottom: 1rem;
+    }
+    
+    .btn {
+      width: 100%;
+      padding: 0.875rem;
+      border-radius: 12px;
+      border: none;
+      font-family: inherit;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+    
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+    
+    .btn-primary:hover:not(:disabled) {
+      background: var(--primary-hover);
+      transform: translateY(-1px);
+    }
+    
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text);
+    }
+    
+    .btn-secondary:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.12);
+    }
+    
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      padding: 0.25rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      margin-top: 0.5rem;
+    }
+    
+    .status-badge.success {
+      background: rgba(16, 185, 129, 0.1);
+      color: var(--success);
+    }
+    
+    .status-badge.pending {
+      background: rgba(245, 158, 11, 0.1);
+      color: #F59E0B;
+    }
+    
+    .info-box {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      padding: 0.75rem;
+      margin-top: 0.75rem;
+      word-break: break-all;
+      color: var(--accent);
+    }
+    
+    .log-box {
+      margin-top: 2rem;
+      border-top: 1px solid var(--card-border);
+      padding-top: 1.5rem;
+    }
+    
+    .log-title {
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 0.75rem;
+    }
+    
+    .log-content {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.03);
+      border-radius: 12px;
+      padding: 1rem;
+      max-height: 150px;
+      overflow-y: auto;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    
+    .log-line {
+      margin-bottom: 0.25rem;
+    }
+    .log-line.error { color: var(--error); }
+    .log-line.success { color: var(--success); }
+    .log-line.info { color: var(--accent); }
+  </style>
+</head>
+<body>
 
+  <div class="container">
+    <h1>Link Developer Wallet</h1>
+    <div class="subtitle">Securely link your Solana wallet to your Twitter account under your project's custom API key.</div>
+    
+    <!-- Step 1 -->
+    <div class="step-card active" id="card-step1">
+      <div class="step-header">
+        <div class="step-number">1</div>
+        <div class="step-title">Connect Wallet</div>
+      </div>
+      <div class="step-desc">Connect the Solana wallet holding your assets (Phantom or Solflare).</div>
+      <button class="btn btn-primary" id="btn-connect">Connect Solana Wallet</button>
+      <div id="wallet-info" style="display:none;">
+        <div class="status-badge success">✓ Connected</div>
+        <div class="info-box" id="wallet-address-text"></div>
+      </div>
+    </div>
+    
+    <!-- Step 2 -->
+    <div class="step-card" id="card-step2">
+      <div class="step-header">
+        <div class="step-number">2</div>
+        <div class="step-title">Get Cryptographic Challenge</div>
+      </div>
+      <div class="step-desc">Fetch a unique signature request challenge from Coin Communities.</div>
+      <button class="btn btn-secondary" id="btn-challenge" disabled>Request Challenge</button>
+      <div id="challenge-info" style="display:none;">
+        <div class="status-badge success">✓ Challenge Issued</div>
+        <div class="info-box" id="challenge-text"></div>
+      </div>
+    </div>
+    
+    <!-- Step 3 -->
+    <div class="step-card" id="card-step3">
+      <div class="step-header">
+        <div class="step-number">3</div>
+        <div class="step-title">Sign & Submit Link</div>
+      </div>
+      <div class="step-desc">Sign the message in your wallet and publish the linkage.</div>
+      <button class="btn btn-secondary" id="btn-sign" disabled>Sign & Link Wallet</button>
+      <div id="final-status" style="display:none;">
+        <div class="status-badge" id="final-badge"></div>
+      </div>
+    </div>
+    
+    <!-- Logs -->
+    <div class="log-box">
+      <div class="log-title">Activity Log</div>
+      <div class="log-content" id="log-container">
+        <div class="log-line info">[System] Ready to connect wallet.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const elBtnConnect = document.getElementById('btn-connect');
+    const elBtnChallenge = document.getElementById('btn-challenge');
+    const elBtnSign = document.getElementById('btn-sign');
+    const elWalletInfo = document.getElementById('wallet-info');
+    const elChallengeInfo = document.getElementById('challenge-info');
+    const elWalletAddressText = document.getElementById('wallet-address-text');
+    const elChallengeText = document.getElementById('challenge-text');
+    const elFinalStatus = document.getElementById('final-status');
+    const elFinalBadge = document.getElementById('final-badge');
+    const elLogContainer = document.getElementById('log-container');
+    
+    const card1 = document.getElementById('card-step1');
+    const card2 = document.getElementById('card-step2');
+    const card3 = document.getElementById('card-step3');
+
+    let walletAddress = null;
+    let challenge = null;
+
+    function addLog(msg, type = 'default') {
+      const line = document.createElement('div');
+      line.className = 'log-line ' + type;
+      line.innerText = \`[\${new Date().toLocaleTimeString()}] \${msg}\`;
+      elLogContainer.appendChild(line);
+      elLogContainer.scrollTop = elLogContainer.scrollHeight;
+    }
+
+    // Base58 Encoder for Solana Signatures
+    function bufferToBase58(buffer) {
+      const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+      const digits = [0];
+      for (let i = 0; i < buffer.length; i++) {
+        let carry = buffer[i];
+        for (let j = 0; j < digits.length; j++) {
+          carry += digits[j] << 8;
+          digits[j] = carry % 58;
+          carry = (carry / 58) | 0;
+        }
+        while (carry > 0) {
+          digits.push(carry % 58);
+          carry = (carry / 58) | 0;
+        }
+      }
+      for (let i = 0; i < buffer.length && buffer[i] === 0; i++) {
+        digits.push(0);
+      }
+      return digits.reverse().map(d => ALPHABET[d]).join('');
+    }
+
+    // Step 1: Connect Wallet
+    elBtnConnect.addEventListener('click', async () => {
+      try {
+        if (!window.solana) {
+          alert('Solana wallet (Phantom) not detected! Please install Phantom.');
+          addLog('Phantom wallet extension not found.', 'error');
+          return;
+        }
+        
+        addLog('Connecting to Solana wallet...');
+        const resp = await window.solana.connect();
+        walletAddress = resp.publicKey.toString();
+        
+        elWalletAddressText.innerText = walletAddress;
+        elWalletInfo.style.display = 'block';
+        elBtnConnect.style.display = 'none';
+        
+        card1.classList.remove('active');
+        card2.classList.add('active');
+        elBtnChallenge.disabled = false;
+        elBtnChallenge.className = 'btn btn-primary';
+        
+        addLog(\`Connected to wallet: \${walletAddress}\`, 'success');
+      } catch (err) {
+        addLog(\`Wallet connection error: \${err.message}\`, 'error');
+      }
+    });
+
+    // Step 2: Request Challenge
+    elBtnChallenge.addEventListener('click', async () => {
+      try {
+        addLog('Requesting cryptographic challenge from backend...');
+        elBtnChallenge.disabled = true;
+        
+        const res = await fetch('/api/link-wallet/challenge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ walletAddress })
+        });
+        
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || 'Failed to fetch challenge');
+        }
+        
+        challenge = data.challenge;
+        elChallengeText.innerText = challenge;
+        elChallengeInfo.style.display = 'block';
+        elBtnChallenge.style.display = 'none';
+        
+        card2.classList.remove('active');
+        card3.classList.add('active');
+        elBtnSign.disabled = false;
+        elBtnSign.className = 'btn btn-primary';
+        
+        addLog('Challenge received successfully.', 'success');
+      } catch (err) {
+        elBtnChallenge.disabled = false;
+        addLog(\`Failed to fetch challenge: \${err.message}\`, 'error');
+      }
+    });
+
+    // Step 3: Sign & Submit Link
+    elBtnSign.addEventListener('click', async () => {
+      try {
+        addLog('Prompting signature in wallet...');
+        elBtnSign.disabled = true;
+        
+        const encodedMessage = new TextEncoder().encode(challenge);
+        const signedMessage = await window.solana.signMessage(encodedMessage, "utf8");
+        const signatureBase58 = bufferToBase58(signedMessage.signature);
+        
+        addLog('Signature generated. Submitting linkage back to backend...', 'info');
+        
+        const res = await fetch('/api/link-wallet/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            walletAddress,
+            signature: signatureBase58
+          })
+        });
+        
+        const data = await res.json();
+        elFinalStatus.style.display = 'block';
+        
+        if (!res.ok || data.error) {
+          elFinalBadge.className = 'status-badge error';
+          elFinalBadge.innerText = '✗ Linking Failed';
+          throw new Error(data.error || 'Linking failed');
+        }
+        
+        elFinalBadge.className = 'status-badge success';
+        elFinalBadge.innerText = '✓ Wallet Successfully Linked!';
+        elBtnSign.style.display = 'none';
+        card3.classList.remove('active');
+        
+        addLog('Wallet successfully linked on Coin Communities!', 'success');
+      } catch (err) {
+        elBtnSign.disabled = false;
+        addLog(\`Linking error: \${err.message}\`, 'error');
+      }
+    });
+  </script>
+</body>
+</html>`);
+});
+
+// Fetch challenge from Coin Communities using the userAccessToken & CC_API_KEY
+app.post("/api/link-wallet/challenge", async (req, res) => {
+  try {
+    const { walletAddress } = req.body as { walletAddress?: string };
+    const userAccessToken = process.env.USER_ACCESS_TOKEN;
+
+    if (!walletAddress) {
+      return res.status(400).json({ error: "Missing walletAddress" });
+    }
+    if (!userAccessToken) {
+      return res.status(400).json({ error: "USER_ACCESS_TOKEN is not set in backend env" });
+    }
+
+    configureApi({
+      baseUrl: "https://api.coin-communities.xyz",
+      headers: {
+        "x-api-key": process.env.CC_API_KEY || "",
+        "Authorization": `Bearer ${userAccessToken.trim()}`
+      }
+    });
+
+    console.log(`[LINK-WALLET] Fetching challenge for ${walletAddress} under project API key`);
+    const challengeRes = await api.walletChallenge({
+      body: {
+        address: walletAddress,
+        chainType: "svm"
+      }
+    });
+
+    // Restore server key credentials to protect other flows
+    if (ccServerKey && ccServerSecret) {
+      configureApi({
+        baseUrl: "https://api.coin-communities.xyz",
+        headers: {
+          "x-server-key": ccServerKey,
+          "x-server-secret": ccServerSecret,
+        },
+      });
+    }
+
+    if (challengeRes.error) {
+      console.error("[LINK-WALLET] Challenge error:", challengeRes.error);
+      return res.status(500).json({ error: "Coin Communities challenge error", details: challengeRes.error });
+    }
+
+    return res.json({ challenge: challengeRes.data?.message });
+  } catch (error: any) {
+    console.error("[LINK-WALLET] Internal challenge exception:", error);
+    return res.status(500).json({ error: "Internal server error", message: error?.message });
+  }
+});
+
+// Submit signed challenge to Coin Communities using the userAccessToken & CC_API_KEY
+app.post("/api/link-wallet/submit", async (req, res) => {
+  try {
+    const { walletAddress, signature } = req.body as { walletAddress?: string; signature?: string };
+    const userAccessToken = process.env.USER_ACCESS_TOKEN;
+
+    if (!walletAddress || !signature) {
+      return res.status(400).json({ error: "Missing walletAddress or signature" });
+    }
+    if (!userAccessToken) {
+      return res.status(400).json({ error: "USER_ACCESS_TOKEN is not set in backend env" });
+    }
+
+    configureApi({
+      baseUrl: "https://api.coin-communities.xyz",
+      headers: {
+        "x-api-key": process.env.CC_API_KEY || "",
+        "Authorization": `Bearer ${userAccessToken.trim()}`
+      }
+    });
+
+    console.log(`[LINK-WALLET] Submitting wallet signature for ${walletAddress}`);
+    const linkRes = await api.linkWallet({
+      body: {
+        address: walletAddress,
+        chainType: "svm",
+        signature: signature
+      }
+    });
+
+    // Restore server key credentials to protect other flows
+    if (ccServerKey && ccServerSecret) {
+      configureApi({
+        baseUrl: "https://api.coin-communities.xyz",
+        headers: {
+          "x-server-key": ccServerKey,
+          "x-server-secret": ccServerSecret,
+        },
+      });
+    }
+
+    if (linkRes.error) {
+      console.error("[LINK-WALLET] Link submit error:", linkRes.error);
+      return res.status(500).json({ error: "Coin Communities linking error", details: linkRes.error });
+    }
+
+    return res.json({ success: true, message: "Wallet successfully linked!" });
+  } catch (error: any) {
+    console.error("[LINK-WALLET] Internal link submit exception:", error);
+    return res.status(500).json({ error: "Internal server error", message: error?.message });
+  }
+});
 
 // List agents — same shape frontend expects
 app.get("/agents", (_req, res) => {
