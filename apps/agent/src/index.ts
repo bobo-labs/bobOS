@@ -13,7 +13,7 @@
 import "dotenv/config"; // ← Must be first: loads .env before Pool is created
 import express from "express";
 import cors from "cors";
-import { db, users, proposals, votes, ccLinkedAccounts } from "@bobos/database";
+import { db, users, proposals, votes, ccLinkedAccounts, inviteCodes } from "@bobos/database";
 import { eq, sql } from "drizzle-orm";
 import OAuth from "oauth-1.0a";
 import crypto from "crypto";
@@ -2962,8 +2962,51 @@ export async function startTwitterFilteredStream() {
 
 // ─── Onboard — CC OAuth flow ──────────────────────────────────────────────────
 
-app.get("/onboard", (_req, res) => {
+/** POST /admin/generate-invite — protected admin route to create one-time onboard invite codes */
+app.post("/admin/generate-invite", async (req, res) => {
+  const adminSecret = process.env.ADMIN_SECRET;
+  const provided = req.headers["x-admin-secret"] || req.query.secret;
+  if (!adminSecret || provided !== adminSecret) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  const note = (req.body?.note as string) || (req.query.note as string) || null;
+  const code = "bobo-" + crypto.randomBytes(8).toString("hex");
+  try {
+    await db.insert(inviteCodes).values({ code, note });
+    const baseUrl = process.env.AGENT_PUBLIC_URL || "https://agent-production-6e6f.up.railway.app";
+    const link = `${baseUrl}/onboard?code=${code}`;
+    console.log(`[ADMIN] Generated invite code: ${code} (${note || "no label"})`);
+    return res.json({ code, link, note });
+  } catch (err: any) {
+    console.error("[ADMIN] Failed to insert invite code:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/onboard", async (req, res) => {
   const baseUrl = process.env.AGENT_PUBLIC_URL || "https://agent-production-6e6f.up.railway.app";
+  const code = req.query.code as string | undefined;
+
+  // Validate invite code — show access-denied page if missing or already used
+  if (!code) {
+    res.setHeader("Content-Type", "text/html");
+    return res.status(403).send(accessDeniedPage("No invite code provided.", baseUrl));
+  }
+  try {
+    const [invite] = await db.select().from(inviteCodes).where(eq(inviteCodes.code as any, code as any) as any);
+    if (!invite) {
+      res.setHeader("Content-Type", "text/html");
+      return res.status(403).send(accessDeniedPage("This invite link is invalid.", baseUrl));
+    }
+    if (invite.used) {
+      res.setHeader("Content-Type", "text/html");
+      return res.status(403).send(accessDeniedPage("This invite link has already been used.", baseUrl));
+    }
+  } catch (err: any) {
+    console.error("[ONBOARD] Invite code lookup failed:", err);
+    return res.status(500).send("Internal error checking invite code.");
+  }
+
   res.setHeader("Content-Type", "text/html");
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -3000,17 +3043,50 @@ app.get("/onboard", (_req, res) => {
     <div class="feature"><span class="feature-icon">🔄</span><div class="feature-text"><strong>Auto token refresh</strong> — Your connection stays active without manual renewal.</div></div>
     <div class="feature"><span class="feature-icon">🔐</span><div class="feature-text"><strong>Non-custodial</strong> — Only tweet forwarding, nothing else. Revoke anytime from CC settings.</div></div>
     <hr class="divider">
-    <a class="btn" href="${baseUrl}/onboard/start">Connect with Coin Communities →</a>
+    <a class="btn" href="${baseUrl}/onboard/start?code=${code}">Connect with Coin Communities →</a>
     <p class="note">You'll be redirected to Coin Communities to authorize with your Twitter account.</p>
   </div>
 </body>
 </html>`);
 });
 
-app.get("/onboard/start", async (_req, res) => {
+/** Reusable access-denied HTML page */
+function accessDeniedPage(reason: string, baseUrl: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Access Required — Bobo Community</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Outfit',sans-serif;background:#0B0D17;color:#F3F4F6;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem}
+    .card{max-width:440px;width:100%;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:24px;padding:3rem 2.5rem;text-align:center;box-shadow:0 24px 60px rgba(0,0,0,.6);animation:up .7s ease-out}
+    @keyframes up{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+    .icon{font-size:3rem;margin-bottom:1rem}
+    h1{font-size:1.6rem;font-weight:800;margin-bottom:.5rem}
+    p{color:#9CA3AF;font-size:.9rem;line-height:1.6}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">🔒</div>
+    <h1>Invite Required</h1>
+    <p>${reason}</p>
+    <p style="margin-top:1rem">To get access, reach out to the BOBO team.</p>
+  </div>
+</body>
+</html>`;
+}
+
+app.get("/onboard/start", async (req, res) => {
   try {
+    const code = req.query.code as string | undefined;
     const baseUrl = process.env.AGENT_PUBLIC_URL || "https://agent-production-6e6f.up.railway.app";
-    const redirectUrl = `${baseUrl}/onboard/callback`;
+    // Thread the invite code through the state so callback can retrieve it
+    const redirectUrl = code
+      ? `${baseUrl}/onboard/callback?invite=${encodeURIComponent(code)}`
+      : `${baseUrl}/onboard/callback`;
     configureApi({ baseUrl: "https://api.coin-communities.xyz", headers: { "x-api-key": process.env.CC_API_KEY || "" } });
     const result = await api.twitterAuthUrl({ query: { redirectUrl } });
     if (ccServerKey && ccServerSecret) {
@@ -3059,7 +3135,20 @@ app.get("/onboard/callback", async (req, res) => {
     const { twitterId, username } = user;
     await upsertCCLinkedAccount({ twitter_id: twitterId, twitter_username: username, access_token: accessToken, refresh_token: refreshToken });
     console.log(`[ONBOARD] ✅ @${username} (Twitter ID: ${twitterId}) successfully onboarded!`);
-    
+
+    // Mark the invite code as used (if one was threaded through the callback URL)
+    const inviteCode = req.query.invite as string | undefined;
+    if (inviteCode) {
+      try {
+        await db.update(inviteCodes)
+          .set({ used: true, used_by: username || twitterId, used_at: new Date() } as any)
+          .where(eq(inviteCodes.code as any, inviteCode as any) as any);
+        console.log(`[ONBOARD] Invite code "${inviteCode}" marked as used by @${username}`);
+      } catch (e: any) {
+        console.warn(`[ONBOARD] Could not mark invite code as used:`, e.message);
+      }
+    }
+
     // Trigger dynamic reload of the Twitter stream rules to start tracking the new user
     startTwitterFilteredStream().catch(err => {
       console.error("[ONBOARD] Failed to reload Twitter stream rules:", err);
@@ -3376,6 +3465,25 @@ app.listen(PORT, async () => {
     console.log("[DB] cc_linked_accounts table ready.");
   } catch (err: any) {
     console.warn("[DB] Could not auto-create cc_linked_accounts:", err.message);
+  }
+
+  // Auto-create invite_codes table if it doesn't exist
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS invite_codes (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        code VARCHAR(64) NOT NULL UNIQUE,
+        used BOOLEAN NOT NULL DEFAULT FALSE,
+        used_by VARCHAR(100),
+        note VARCHAR(200),
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        used_at TIMESTAMP
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS invite_codes_code_idx ON invite_codes (code);
+    `);
+    console.log("[DB] invite_codes table ready.");
+  } catch (err: any) {
+    console.warn("[DB] Could not auto-create invite_codes:", err.message);
   }
 
   // Seed bobo__os account from env tokens

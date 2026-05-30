@@ -16,6 +16,20 @@ export const ccLinkedAccounts = pgTable("cc_linked_accounts", {
   twitterIdIdx: uniqueIndex("cc_linked_accounts_twitter_id_idx").on(table.twitter_id),
 }));
 
+// One-time invite codes that gate access to the onboarding flow.
+// Admin generates these manually (or later: auto-generated after fee payment).
+export const inviteCodes = pgTable("invite_codes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  code: varchar("code", { length: 64 }).notNull().unique(),
+  used: boolean("used").notNull().default(false),
+  used_by: varchar("used_by", { length: 100 }),   // twitter_id or username once consumed
+  note: varchar("note", { length: 200 }),           // optional admin label (e.g. "@username")
+  created_at: timestamp("created_at").defaultNow().notNull(),
+  used_at: timestamp("used_at"),
+}, (table) => ({
+  codeIdx: uniqueIndex("invite_codes_code_idx").on(table.code),
+}));
+
 export const users = pgTable("users", {
   user_id: uuid("user_id").primaryKey().defaultRandom(),
   solana_wallet: varchar("solana_wallet", { length: 44 }),
@@ -58,4 +72,3 @@ export const votes = pgTable("votes", {
     proposalVoterIdx: uniqueIndex("proposal_voter_idx").on(table.proposal_id, table.voter_wallet),
   };
 });
-
