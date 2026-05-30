@@ -2529,118 +2529,312 @@ async function forwardTweetInternally(params: { tweetId: string; tweetText: stri
   }
 }
 
-async function startTwitterApiPoller() {
-  const oauth = new OAuth({
-    consumer: {
-      key: process.env.TWITTER_API_KEY || "",
-      secret: process.env.TWITTER_API_SECRET_KEY || ""
+let activeStreamAbortController: AbortController | null = null;
+
+export async function getTwitterBearerToken(): Promise<string> {
+  const apiKey = process.env.TWITTER_API_KEY;
+  const apiSecret = process.env.TWITTER_API_SECRET_KEY;
+  if (!apiKey || !apiSecret) {
+    throw new Error("TWITTER_API_KEY or TWITTER_API_SECRET_KEY is missing in environment.");
+  }
+  const credentials = Buffer.from(`${apiKey}:${apiSecret}`).toString("base64");
+  const res = await fetch("https://api.twitter.com/oauth2/token", {
+    method: "POST",
+    headers: {
+      "Authorization": `Basic ${credentials}`,
+      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
     },
-    signature_method: 'HMAC-SHA1',
-    hash_function(base_string, key) {
-      return crypto.createHmac('sha1', key).update(base_string).digest('base64');
+    body: "grant_type=client_credentials",
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to retrieve bearer token from X API: ${res.statusText} - ${await res.text()}`);
+  }
+  const data = await res.json() as { access_token: string };
+  return data.access_token;
+}
+
+export async function getTwitterUsername(userId: string, bearerToken: string): Promise<string> {
+  const url = `https://api.twitter.com/2/users/${userId}`;
+  const res = await fetch(url, {
+    headers: {
+      "Authorization": `Bearer ${bearerToken}`
     }
   });
-
-  const token = {
-    key: process.env.TWITTER_ACCESS_TOKEN || "",
-    secret: process.env.TWITTER_ACCESS_TOKEN_SECRET || ""
-  };
-
-  let twitterUserId = process.env.TWITTER_USER_ID;
-
-  if (!twitterUserId) {
-    console.log("[POLLER] No TWITTER_USER_ID configured. Fetching authenticated user ID dynamically...");
-    try {
-      const meUrl = "https://api.twitter.com/2/users/me";
-      const requestData = { url: meUrl, method: 'GET' };
-      const headers = oauth.toHeader(oauth.authorize(requestData, token)) as unknown as Record<string, string>;
-
-      const res = await fetch(meUrl, { headers });
-      if (res.ok) {
-        const body = await res.json() as { data?: { id: string } };
-        twitterUserId = body.data?.id;
-        console.log(`[POLLER] Successfully fetched authenticated Twitter User ID: ${twitterUserId}`);
-      } else {
-        console.error("[POLLER] Failed to fetch authenticated user ID:", await res.text());
-      }
-    } catch (err) {
-      console.error("[POLLER] Error fetching authenticated user ID:", err);
-    }
+  if (!res.ok) {
+    throw new Error(`Failed to fetch user username for ID ${userId}: ${res.statusText} - ${await res.text()}`);
   }
+  const body = await res.json() as { data?: { username: string } };
+  if (!body.data?.username) {
+    throw new Error(`User lookup response for ID ${userId} is missing username data.`);
+  }
+  return body.data.username;
+}
 
+export async function setupTwitterStreamRules(username: string, bearerToken: string) {
+  const getUrl = "https://api.twitter.com/2/tweets/search/stream/rules";
+  const postUrl = "https://api.twitter.com/2/tweets/search/stream/rules";
+  
+  // 1. Get current rules
+  const getRes = await fetch(getUrl, {
+    headers: { "Authorization": `Bearer ${bearerToken}` }
+  });
+  if (!getRes.ok) {
+    throw new Error(`Failed to fetch stream rules: ${await getRes.text()}`);
+  }
+  const getBody = await getRes.json() as { data?: Array<{ id: string; value: string; tag?: string }> };
+  const currentRules = getBody.data || [];
+  
+  const targetValue = `from:${username} -is:retweet -is:reply`;
+  const ruleExists = currentRules.some(r => r.value === targetValue);
+  
+  if (ruleExists) {
+    console.log(`[POLLER] Filter rule for ${username} already exists.`);
+    return;
+  }
+  
+  console.log(`[POLLER] Syncing stream rules. Existing rules found:`, currentRules.length);
+  
+  // 2. Delete existing rules if any exist
+  if (currentRules.length > 0) {
+    const ids = currentRules.map(r => r.id);
+    const deleteRes = await fetch(postUrl, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${bearerToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        delete: { ids }
+      })
+    });
+    if (!deleteRes.ok) {
+      throw new Error(`Failed to delete old stream rules: ${await deleteRes.text()}`);
+    }
+    console.log(`[POLLER] Successfully deleted ${ids.length} old rules.`);
+  }
+  
+  // 3. Add new rule
+  const addRes = await fetch(postUrl, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${bearerToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      add: [
+        {
+          value: targetValue,
+          tag: `posts by ${username}`
+        }
+      ]
+    })
+  });
+  if (!addRes.ok) {
+    throw new Error(`Failed to create stream rule: ${await addRes.text()}`);
+  }
+  console.log(`[POLLER] Successfully created stream rule for ${username}.`);
+}
+
+export async function startTwitterFilteredStream() {
+  const twitterUserId = process.env.TWITTER_USER_ID;
   if (!twitterUserId) {
-    console.warn("[POLLER] Could not resolve Twitter User ID. Poller is inactive.");
+    console.warn("[POLLER] No TWITTER_USER_ID configured. Filtered stream is inactive.");
     return;
   }
 
-  const pollIntervalSec = parseInt(process.env.TWITTER_POLL_INTERVAL_SEC || "180");
-  console.log(`[POLLER] Initializing Twitter API poller for user ID: ${twitterUserId} every ${pollIntervalSec}s`);
+  let reconnectDelay = 2000; // start with 2s reconnect delay
+  const maxReconnectDelay = 60000;
 
-  // Populate history first to prevent double-posting on server restarts
-  try {
-    const url = `https://api.twitter.com/2/users/${twitterUserId}/tweets?max_results=5&tweet.fields=referenced_tweets,text`;
-    const requestData = { url, method: 'GET' };
-    const headers = oauth.toHeader(oauth.authorize(requestData, token)) as unknown as Record<string, string>;
-
-    const res = await fetch(url, { headers });
-    if (res.ok) {
-      const body = await res.json() as { data?: Array<{ id: string }> };
-      const tweets = body.data || [];
-      for (const tweet of tweets) {
-        processedTweets.add(tweet.id);
-      }
-      console.log(`[POLLER] Initialized with ${processedTweets.size} historical tweets.`);
-    } else {
-      console.error("[POLLER] Failed to initialize history from X API:", await res.text());
+  async function connect() {
+    // If there is an existing abort controller, abort it first
+    if (activeStreamAbortController) {
+      activeStreamAbortController.abort();
+      activeStreamAbortController = null;
     }
-  } catch (err) {
-    console.error("[POLLER] Failed to initialize history from X API:", err);
+
+    activeStreamAbortController = new AbortController();
+    const signal = activeStreamAbortController.signal;
+
+    try {
+      console.log("[POLLER] Retrieving bearer token...");
+      const bearerToken = await getTwitterBearerToken();
+
+      console.log(`[POLLER] Fetching username for user ID: ${twitterUserId}`);
+      const username = await getTwitterUsername(twitterUserId!, bearerToken);
+      console.log(`[POLLER] Resolved username: ${username}`);
+
+      console.log("[POLLER] Configuring stream rules...");
+      await setupTwitterStreamRules(username, bearerToken);
+
+      console.log("[POLLER] Connecting to X Filtered Stream...");
+      const streamUrl = "https://api.twitter.com/2/tweets/search/stream?tweet.fields=referenced_tweets,text";
+      const res = await fetch(streamUrl, {
+        headers: { "Authorization": `Bearer ${bearerToken}` },
+        signal
+      });
+
+      if (!res.ok) {
+        throw new Error(`X stream connection returned ${res.status}: ${await res.text()}`);
+      }
+
+      const body = res.body;
+      if (!body) {
+        throw new Error("X stream response body is null");
+      }
+
+      // Reset reconnect delay on successful connection
+      reconnectDelay = 2000;
+      console.log("[POLLER] Connected to X Filtered Stream successfully. Reading events...");
+
+      let lastChunkReceivedAt = Date.now();
+
+      // Keep-alive monitor: check every 10 seconds if we have heard anything in the last 35 seconds
+      const keepAliveInterval = setInterval(() => {
+        if (Date.now() - lastChunkReceivedAt > 35000) {
+          console.warn("[POLLER] Stream keep-alive timeout! No data received for 35s. Reconnecting...");
+          clearInterval(keepAliveInterval);
+          if (activeStreamAbortController) {
+            activeStreamAbortController.abort();
+          }
+        }
+      }, 10000);
+
+      // Clean up keep-alive interval when signal is aborted
+      signal.addEventListener("abort", () => {
+        clearInterval(keepAliveInterval);
+      });
+
+      if (Symbol.asyncIterator in body) {
+        let buffer = "";
+        const decoder = new TextDecoder();
+        for await (const chunk of body as any) {
+          if (signal.aborted) break;
+          lastChunkReceivedAt = Date.now(); // update keep-alive timestamp
+
+          buffer += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) {
+              // Keep-alive heartbeat (\r\n)
+              continue;
+            }
+            handleStreamPayload(trimmed);
+          }
+        }
+      } else {
+        // Fallback for environment with standard web ReadableStream
+        const reader = (body as ReadableStream).getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        try {
+          while (true) {
+            if (signal.aborted) break;
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            lastChunkReceivedAt = Date.now(); // update keep-alive timestamp
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed) continue;
+              handleStreamPayload(trimmed);
+            }
+          }
+        } finally {
+          reader.releaseLock();
+        }
+      }
+
+    } catch (err: any) {
+      if (err.name === "AbortError" || signal.aborted) {
+        console.log("[POLLER] Stream connection aborted cleanly.");
+      } else {
+        console.error("[POLLER] Stream connection error:", err.message || err);
+        // Exponential backoff reconnect
+        console.log(`[POLLER] Reconnecting in ${reconnectDelay / 1000}s...`);
+        setTimeout(() => {
+          connect().catch(e => console.error("[POLLER] Reconnect exception:", e));
+        }, reconnectDelay);
+        reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
+      }
+    }
   }
 
-  // Poll every pollIntervalSec seconds
-  setInterval(async () => {
+  function handleStreamPayload(rawLine: string) {
     try {
-      const url = `https://api.twitter.com/2/users/${twitterUserId}/tweets?max_results=5&tweet.fields=referenced_tweets,text`;
-      const requestData = { url, method: 'GET' };
-      const headers = oauth.toHeader(oauth.authorize(requestData, token)) as unknown as Record<string, string>;
-
-      const res = await fetch(url, { headers });
-      if (!res.ok) {
-        console.error("[POLLER] Error polling tweets from X API:", await res.text());
+      const payload = JSON.parse(rawLine);
+      if (payload.errors) {
+        console.error("[POLLER] Received error payload from stream:", payload.errors);
         return;
       }
 
-      const body = await res.json() as { data?: Array<{ id: string; text: string; referenced_tweets?: Array<{ type: string }> }> };
-      const tweets = body.data || [];
-      const newTweets = tweets.filter(t => !processedTweets.has(t.id)).reverse();
+      const tweet = payload.data;
+      if (!tweet) return;
 
-      for (const tweet of newTweets) {
-        const referenced = tweet.referenced_tweets || [];
-        const isRetweet = referenced.some(r => r.type === "retweeted");
-        const isReply = referenced.some(r => r.type === "replied_to");
+      console.log(`[POLLER] Received stream tweet event: ${tweet.id} - "${tweet.text}"`);
 
-        if (isRetweet || isReply) {
-          processedTweets.add(tweet.id);
-          console.log(`[POLLER] Ignoring retweet or reply: ${tweet.id}`);
-          continue;
-        }
-
-        console.log(`[POLLER] Found new tweet: ${tweet.id} - "${tweet.text}"`);
-
-        const success = await forwardTweetInternally({
-          tweetId: tweet.id,
-          tweetText: tweet.text || "",
-          twitterId: twitterUserId,
-        });
-
-        if (success) {
-          processedTweets.add(tweet.id);
-        }
+      // De-duplicate check
+      if (processedTweets.has(tweet.id)) {
+        console.log(`[POLLER] Tweet ${tweet.id} already processed. Skipping.`);
+        return;
       }
-    } catch (err) {
-      console.error("[POLLER] Error polling X API:", err);
+      processedTweets.add(tweet.id);
+
+      // Keep processedTweets Set size bounded (e.g. max 1000 items)
+      if (processedTweets.size > 1000) {
+        const firstItem = processedTweets.values().next().value;
+        if (firstItem !== undefined) processedTweets.delete(firstItem);
+      }
+
+      // Double-check referential tweets (replies/retweets), though rules should filter them
+      const referenced = tweet.referenced_tweets || [];
+      const isRetweet = referenced.some((r: any) => r.type === "retweeted");
+      const isReply = referenced.some((r: any) => r.type === "replied_to");
+
+      if (isRetweet || isReply) {
+        console.log(`[POLLER] Skipping reply/retweet from stream processing: ${tweet.id}`);
+        return;
+      }
+
+      // Forward to Coin Communities
+      forwardTweetInternally({
+        tweetId: tweet.id,
+        tweetText: tweet.text || "",
+        twitterId: twitterUserId!,
+      }).then(success => {
+        if (success) {
+          console.log(`[POLLER] Successfully forwarded tweet ${tweet.id} from stream.`);
+        } else {
+          console.error(`[POLLER] Failed to forward stream tweet ${tweet.id}.`);
+        }
+      }).catch(e => {
+        console.error(`[POLLER] Exception forwarding stream tweet ${tweet.id}:`, e);
+      });
+
+    } catch (e) {
+      console.error("[POLLER] Failed to parse stream payload line:", rawLine, e);
     }
-  }, pollIntervalSec * 1000);
+  }
+
+  // Clean exit handlers to avoid connection leaks
+  process.on("SIGINT", () => {
+    if (activeStreamAbortController) activeStreamAbortController.abort();
+    process.exit(0);
+  });
+  process.on("SIGTERM", () => {
+    if (activeStreamAbortController) activeStreamAbortController.abort();
+    process.exit(0);
+  });
+
+  // Start connection
+  await connect();
 }
 
 // ─── Start ────────────────────────────────────────────────────────────────────
@@ -2652,8 +2846,8 @@ app.listen(PORT, () => {
   console.log(`  POST http://localhost:${PORT}/:agentId/message`);
   console.log(`  POST http://localhost:${PORT}/ping-wallet`);
 
-  // Start the internal polling loop
-  startTwitterApiPoller().catch(err => {
+  // Start the internal streaming listener
+  startTwitterFilteredStream().catch(err => {
     console.error("[POLLER] Failed to start:", err);
   });
 });
