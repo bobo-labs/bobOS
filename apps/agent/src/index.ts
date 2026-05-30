@@ -2530,15 +2530,6 @@ async function forwardTweetInternally(params: { tweetId: string; tweetText: stri
 }
 
 async function startTwitterApiPoller() {
-  const twitterUserId = process.env.TWITTER_USER_ID;
-  if (!twitterUserId) {
-    console.log("[POLLER] No TWITTER_USER_ID configured. Poller is inactive.");
-    return;
-  }
-
-  const pollIntervalSec = parseInt(process.env.TWITTER_POLL_INTERVAL_SEC || "180");
-  console.log(`[POLLER] Initializing Twitter API poller for user ID: ${twitterUserId} every ${pollIntervalSec}s`);
-
   const oauth = new OAuth({
     consumer: {
       key: process.env.TWITTER_API_KEY || "",
@@ -2554,6 +2545,36 @@ async function startTwitterApiPoller() {
     key: process.env.TWITTER_ACCESS_TOKEN || "",
     secret: process.env.TWITTER_ACCESS_TOKEN_SECRET || ""
   };
+
+  let twitterUserId = process.env.TWITTER_USER_ID;
+
+  if (!twitterUserId) {
+    console.log("[POLLER] No TWITTER_USER_ID configured. Fetching authenticated user ID dynamically...");
+    try {
+      const meUrl = "https://api.twitter.com/2/users/me";
+      const requestData = { url: meUrl, method: 'GET' };
+      const headers = oauth.toHeader(oauth.authorize(requestData, token)) as unknown as Record<string, string>;
+
+      const res = await fetch(meUrl, { headers });
+      if (res.ok) {
+        const body = await res.json() as { data?: { id: string } };
+        twitterUserId = body.data?.id;
+        console.log(`[POLLER] Successfully fetched authenticated Twitter User ID: ${twitterUserId}`);
+      } else {
+        console.error("[POLLER] Failed to fetch authenticated user ID:", await res.text());
+      }
+    } catch (err) {
+      console.error("[POLLER] Error fetching authenticated user ID:", err);
+    }
+  }
+
+  if (!twitterUserId) {
+    console.warn("[POLLER] Could not resolve Twitter User ID. Poller is inactive.");
+    return;
+  }
+
+  const pollIntervalSec = parseInt(process.env.TWITTER_POLL_INTERVAL_SEC || "180");
+  console.log(`[POLLER] Initializing Twitter API poller for user ID: ${twitterUserId} every ${pollIntervalSec}s`);
 
   // Populate history first to prevent double-posting on server restarts
   try {
