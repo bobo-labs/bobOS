@@ -3075,13 +3075,19 @@ app.get("/onboard/callback", async (req, res) => {
   <style>
     * { box-sizing:border-box; margin:0; padding:0; }
     body { font-family:'Outfit',sans-serif; background:#0B0D17; color:#F3F4F6; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:2rem; }
-    .card { max-width:460px; width:100%; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:24px; padding:3rem 2.5rem; text-align:center; box-shadow:0 24px 60px rgba(0,0,0,.6); animation:up .7s ease-out; }
+    .card { max-width:480px; width:100%; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:24px; padding:3rem 2.5rem; text-align:center; box-shadow:0 24px 60px rgba(0,0,0,.6); animation:up .7s ease-out; }
     @keyframes up { from{opacity:0;transform:translateY(24px)} to{opacity:1;transform:translateY(0)} }
     .checkmark { font-size:3.5rem; margin-bottom:1rem; }
     h1 { font-size:1.75rem; font-weight:800; background:linear-gradient(135deg,#fff 30%,#10B981); -webkit-background-clip:text; -webkit-text-fill-color:transparent; margin-bottom:.5rem; }
     .handle { font-size:1.1rem; color:#22D3EE; font-weight:600; margin-bottom:1rem; }
     p { color:#9CA3AF; font-size:.9rem; line-height:1.6; }
-    .pill { display:inline-block; background:rgba(16,185,129,.1); color:#10B981; border-radius:9999px; padding:.25rem .9rem; font-size:.75rem; font-weight:600; margin-top:1.5rem; }
+    .pill { display:inline-block; background:rgba(16,185,129,.1); color:#10B981; border-radius:9999px; padding:.25rem .9rem; font-size:.75rem; font-weight:600; margin-top:1.25rem; }
+    .divider { border:none; border-top:1px solid rgba(255,255,255,0.07); margin:1.75rem 0; }
+    .wallet-heading { font-size:.8rem; font-weight:600; color:#9CA3AF; text-transform:uppercase; letter-spacing:.08em; margin-bottom:.75rem; }
+    .btn-wallet { display:inline-flex; align-items:center; gap:.5rem; background:linear-gradient(135deg,#7C3AED,#9333EA); color:#fff; font-family:inherit; font-size:.95rem; font-weight:600; padding:.75rem 1.75rem; border:none; border-radius:12px; cursor:pointer; text-decoration:none; transition:transform .2s,box-shadow .2s; box-shadow:0 4px 20px rgba(147,51,234,.35); }
+    .btn-wallet:hover { transform:translateY(-2px); box-shadow:0 8px 28px rgba(147,51,234,.5); }
+    .skip { display:block; margin-top:.75rem; font-size:.78rem; color:#6B7280; cursor:pointer; }
+    .skip:hover { color:#9CA3AF; }
   </style>
 </head>
 <body>
@@ -3089,14 +3095,255 @@ app.get("/onboard/callback", async (req, res) => {
     <div class="checkmark">✅</div>
     <h1>You're Connected!</h1>
     <div class="handle">@${username}</div>
-    <p>Your tweets will now be automatically forwarded to the BOBO community room on Coin Communities. You can close this tab.</p>
+    <p>Your tweets will now be automatically forwarded to the BOBO community room on Coin Communities.</p>
     <div class="pill">Auto-refresh active · No expiry worries</div>
+    <hr class="divider">
+    <div id="wallet-section">
+      <div class="wallet-heading">🔗 One more step (optional)</div>
+      <p style="margin-bottom:1rem;">Link your Solana wallet so your posts appear under your on-chain identity in the community room.</p>
+      <a class="btn-wallet" href="/onboard/link-wallet?twitter_id=${twitterId}">🪙 Link My Wallet →</a>
+      <span class="skip" onclick="document.getElementById('wallet-section').innerHTML='<p style=color:#6B7280;font-size:.8rem;margin-top:.5rem>You can link your wallet later from the community settings.</p>'">Skip for now</span>
+    </div>
   </div>
 </body>
 </html>`);
   } catch (err: any) {
     console.error("[ONBOARD] Callback exception:", err);
     return res.status(500).send("Internal error: " + err.message);
+  }
+});
+
+// ─── Onboard: Link Wallet ─────────────────────────────────────────────────────
+
+/** GET /onboard/link-wallet?twitter_id=XXX — 3-step wallet linking page for onboarded users */
+app.get("/onboard/link-wallet", (req, res) => {
+  const twitterId = (req.query.twitter_id as string) || "";
+  if (!twitterId) return res.status(400).send("Missing twitter_id parameter.");
+  res.setHeader("Content-Type", "text/html");
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Link Wallet — Bobo Community</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Space+Mono&display=swap" rel="stylesheet">
+  <style>
+    :root{--bg:#0B0D17;--card:rgba(255,255,255,0.03);--border:rgba(255,255,255,0.08);--text:#F3F4F6;--muted:#9CA3AF;--primary:#9333EA;--primary-h:#A855F7;--accent:#22D3EE;--success:#10B981;--error:#EF4444}
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Outfit',sans-serif;background:var(--bg);background-image:radial-gradient(circle at 10% 20%,rgba(147,51,234,.1) 0%,transparent 40%),radial-gradient(circle at 90% 80%,rgba(34,211,238,.08) 0%,transparent 40%);color:var(--text);min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:2rem}
+    .container{max-width:520px;width:100%;background:var(--card);border:1px solid var(--border);backdrop-filter:blur(16px);border-radius:24px;padding:3rem 2.5rem;box-shadow:0 20px 40px rgba(0,0,0,.5);animation:fadeIn .7s ease-out}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+    .logo{text-align:center;font-size:2.5rem;margin-bottom:.5rem}
+    h1{font-size:1.75rem;font-weight:800;text-align:center;background:linear-gradient(135deg,#fff 30%,var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:.5rem}
+    .subtitle{font-size:.9rem;color:var(--muted);text-align:center;margin-bottom:2rem;line-height:1.5}
+    .step{background:rgba(255,255,255,.015);border:1px solid rgba(255,255,255,.04);border-radius:16px;padding:1.25rem 1.5rem;margin-bottom:1.25rem;transition:all .3s}
+    .step.active{border-color:rgba(147,51,234,.4);background:rgba(147,51,234,.03);box-shadow:0 0 20px rgba(147,51,234,.06)}
+    .step-head{display:flex;align-items:center;gap:.85rem;margin-bottom:.6rem}
+    .step-num{width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.8rem;color:var(--muted);flex-shrink:0}
+    .step.active .step-num{background:var(--primary);color:#fff}
+    .step-title{font-size:1rem;font-weight:600}
+    .step-desc{font-size:.85rem;color:var(--muted);margin-bottom:.9rem;line-height:1.4}
+    .btn{width:100%;padding:.8rem;border-radius:12px;border:none;font-family:inherit;font-size:.95rem;font-weight:600;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:.5rem}
+    .btn-primary{background:var(--primary);color:#fff}
+    .btn-primary:hover:not(:disabled){background:var(--primary-h);transform:translateY(-1px)}
+    .btn-primary:disabled{opacity:.45;cursor:not-allowed}
+    .btn-secondary{background:rgba(255,255,255,.08);color:var(--text)}
+    .badge{display:inline-flex;align-items:center;gap:.35rem;padding:.2rem .7rem;border-radius:9999px;font-size:.72rem;font-weight:600;margin-top:.4rem}
+    .badge.ok{background:rgba(16,185,129,.1);color:var(--success)}
+    .badge.err{background:rgba(239,68,68,.1);color:var(--error)}
+    .mono{font-family:'Space Mono',monospace;font-size:.72rem;background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.05);border-radius:8px;padding:.6rem;margin-top:.6rem;word-break:break-all;color:var(--accent)}
+    .log-box{margin-top:1.75rem;border-top:1px solid var(--border);padding-top:1.25rem}
+    .log-label{font-size:.8rem;font-weight:600;color:var(--muted);margin-bottom:.5rem}
+    .log{font-family:'Space Mono',monospace;font-size:.72rem;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.03);border-radius:10px;padding:.85rem;max-height:130px;overflow-y:auto;color:var(--muted);line-height:1.6}
+    .log .e{color:var(--error)}.log .s{color:var(--success)}.log .i{color:var(--accent)}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">🪙</div>
+    <h1>Link Your Wallet</h1>
+    <div class="subtitle">Connect your Solana wallet so your posts appear under your on-chain identity in the BOBO community room.</div>
+
+    <div class="step active" id="s1">
+      <div class="step-head"><div class="step-num">1</div><div class="step-title">Connect Wallet</div></div>
+      <div class="step-desc">Connect the Solana wallet holding your $BOBO assets (Phantom or Solflare).</div>
+      <button class="btn btn-primary" id="btn-connect">Connect Solana Wallet</button>
+      <div id="wallet-info" style="display:none"><div class="badge ok">✓ Connected</div><div class="mono" id="wallet-addr"></div></div>
+    </div>
+
+    <div class="step" id="s2">
+      <div class="step-head"><div class="step-num">2</div><div class="step-title">Get Challenge</div></div>
+      <div class="step-desc">Fetch a unique cryptographic challenge from Coin Communities.</div>
+      <button class="btn btn-secondary" id="btn-challenge" disabled>Request Challenge</button>
+      <div id="challenge-info" style="display:none"><div class="badge ok">✓ Challenge Ready</div><div class="mono" id="challenge-text"></div></div>
+    </div>
+
+    <div class="step" id="s3">
+      <div class="step-head"><div class="step-num">3</div><div class="step-title">Sign &amp; Link</div></div>
+      <div class="step-desc">Sign the challenge in your wallet to prove ownership, then link it to your account.</div>
+      <button class="btn btn-secondary" id="btn-sign" disabled>Sign &amp; Link Wallet</button>
+      <div id="final-status" style="display:none"><div class="badge" id="final-badge"></div></div>
+    </div>
+
+    <div class="log-box">
+      <div class="log-label">Activity Log</div>
+      <div class="log" id="log"><span class="i">[System] Ready. Please connect your wallet.</span></div>
+    </div>
+  </div>
+
+  <script>
+    const TWITTER_ID = '${twitterId}';
+    let walletAddress = null, challenge = null;
+    const s1 = document.getElementById('s1'), s2 = document.getElementById('s2'), s3 = document.getElementById('s3');
+    const btnConnect = document.getElementById('btn-connect');
+    const btnChallenge = document.getElementById('btn-challenge');
+    const btnSign = document.getElementById('btn-sign');
+    const logEl = document.getElementById('log');
+
+    function log(msg, cls) {
+      const d = document.createElement('div');
+      d.innerHTML = '<span class="' + (cls||'') + '">[' + new Date().toLocaleTimeString() + '] ' + msg + '</span>';
+      logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function b58(buf) {
+      const A = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz', d = [0];
+      for (let i = 0; i < buf.length; i++) {
+        let c = buf[i];
+        for (let j = 0; j < d.length; j++) { c += d[j] << 8; d[j] = c % 58; c = c / 58 | 0; }
+        while (c > 0) { d.push(c % 58); c = c / 58 | 0; }
+      }
+      for (let i = 0; i < buf.length && buf[i] === 0; i++) d.push(0);
+      return d.reverse().map(x => A[x]).join('');
+    }
+
+    btnConnect.addEventListener('click', async () => {
+      if (!window.solana) { alert('Phantom wallet not found! Please install it first.'); return; }
+      try {
+        log('Connecting to Solana wallet...');
+        const resp = await window.solana.connect();
+        walletAddress = resp.publicKey.toString();
+        document.getElementById('wallet-addr').innerText = walletAddress;
+        document.getElementById('wallet-info').style.display = 'block';
+        btnConnect.style.display = 'none';
+        s1.classList.remove('active'); s2.classList.add('active');
+        btnChallenge.disabled = false; btnChallenge.className = 'btn btn-primary';
+        log('Wallet connected: ' + walletAddress, 's');
+      } catch (e) { log('Error: ' + e.message, 'e'); }
+    });
+
+    btnChallenge.addEventListener('click', async () => {
+      btnChallenge.disabled = true;
+      try {
+        log('Requesting challenge from backend...');
+        const r = await fetch('/api/onboard/wallet-challenge', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ twitter_id: TWITTER_ID, walletAddress })
+        });
+        const d = await r.json();
+        if (!r.ok || d.error) throw new Error(d.error || 'Request failed');
+        challenge = d.challenge;
+        document.getElementById('challenge-text').innerText = challenge;
+        document.getElementById('challenge-info').style.display = 'block';
+        btnChallenge.style.display = 'none';
+        s2.classList.remove('active'); s3.classList.add('active');
+        btnSign.disabled = false; btnSign.className = 'btn btn-primary';
+        log('Challenge received.', 's');
+      } catch (e) { btnChallenge.disabled = false; log('Error: ' + e.message, 'e'); }
+    });
+
+    btnSign.addEventListener('click', async () => {
+      btnSign.disabled = true;
+      try {
+        log('Prompting signature in wallet...');
+        const encoded = new TextEncoder().encode(challenge);
+        const signed = await window.solana.signMessage(encoded, 'utf8');
+        const sig = b58(signed.signature);
+        log('Signature ready. Submitting to backend...', 'i');
+        const r = await fetch('/api/onboard/wallet-submit', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ twitter_id: TWITTER_ID, walletAddress, signature: sig })
+        });
+        const d = await r.json();
+        const badge = document.getElementById('final-badge');
+        document.getElementById('final-status').style.display = 'block';
+        if (!r.ok || d.error) {
+          badge.className = 'badge err'; badge.innerText = 'Linking Failed: ' + (d.error || 'Unknown error');
+          throw new Error(d.error || 'Failed');
+        }
+        badge.className = 'badge ok'; badge.innerText = '✓ Wallet Linked!';
+        btnSign.style.display = 'none'; s3.classList.remove('active');
+        log('Wallet successfully linked to your Coin Communities account!', 's');
+      } catch (e) { btnSign.disabled = false; log('Error: ' + e.message, 'e'); }
+    });
+  </script>
+</body>
+</html>`);
+});
+
+/** POST /api/onboard/wallet-challenge — request a CC wallet challenge using the onboarded user's own access token */
+app.post("/api/onboard/wallet-challenge", async (req, res) => {
+  try {
+    const { twitter_id, walletAddress } = req.body as { twitter_id?: string; walletAddress?: string };
+    if (!twitter_id || !walletAddress) return res.status(400).json({ error: "Missing twitter_id or walletAddress" });
+
+    const accessToken = await getValidCCToken(twitter_id);
+    if (!accessToken) return res.status(404).json({ error: "No linked CC account found for this Twitter ID. Please complete Twitter auth first." });
+
+    configureApi({ baseUrl: "https://api.coin-communities.xyz", headers: { "x-api-key": process.env.CC_API_KEY || "", "Authorization": `Bearer ${accessToken}` } });
+    console.log(`[ONBOARD-WALLET] Requesting challenge for twitter_id=${twitter_id} wallet=${walletAddress}`);
+    const result = await api.walletChallenge({ body: { address: walletAddress, chainType: "svm" } });
+
+    if (ccServerKey && ccServerSecret) {
+      configureApi({ baseUrl: "https://api.coin-communities.xyz", headers: { "x-server-key": ccServerKey, "x-server-secret": ccServerSecret } });
+    }
+
+    if (result.error) {
+      console.error("[ONBOARD-WALLET] Challenge error:", result.error);
+      return res.status(500).json({ error: "CC challenge error", details: result.error });
+    }
+
+    return res.json({ challenge: result.data?.message });
+  } catch (err: any) {
+    console.error("[ONBOARD-WALLET] Challenge exception:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/** POST /api/onboard/wallet-submit — link wallet on CC and persist address to cc_linked_accounts */
+app.post("/api/onboard/wallet-submit", async (req, res) => {
+  try {
+    const { twitter_id, walletAddress, signature } = req.body as { twitter_id?: string; walletAddress?: string; signature?: string };
+    if (!twitter_id || !walletAddress || !signature) return res.status(400).json({ error: "Missing twitter_id, walletAddress, or signature" });
+
+    const accessToken = await getValidCCToken(twitter_id);
+    if (!accessToken) return res.status(404).json({ error: "No linked CC account found for this Twitter ID." });
+
+    configureApi({ baseUrl: "https://api.coin-communities.xyz", headers: { "x-api-key": process.env.CC_API_KEY || "", "Authorization": `Bearer ${accessToken}` } });
+    console.log(`[ONBOARD-WALLET] Submitting wallet link for twitter_id=${twitter_id} wallet=${walletAddress}`);
+    const result = await api.linkWallet({ body: { address: walletAddress, chainType: "svm", signature } });
+
+    if (ccServerKey && ccServerSecret) {
+      configureApi({ baseUrl: "https://api.coin-communities.xyz", headers: { "x-server-key": ccServerKey, "x-server-secret": ccServerSecret } });
+    }
+
+    if (result.error) {
+      console.error("[ONBOARD-WALLET] Link submit error:", result.error);
+      return res.status(500).json({ error: "CC wallet link error", details: result.error });
+    }
+
+    // Persist wallet address to our local cc_linked_accounts record
+    const [account] = await db.select().from(ccLinkedAccounts).where(eq(ccLinkedAccounts.twitter_id as any, twitter_id as any) as any);
+    if (account) {
+      await db.update(ccLinkedAccounts)
+        .set({ wallet_address: walletAddress, updated_at: new Date() })
+        .where(eq(ccLinkedAccounts.twitter_id as any, twitter_id as any) as any);
+      console.log(`[ONBOARD-WALLET] ✅ Wallet ${walletAddress} saved for twitter_id=${twitter_id}`);
+    }
+
+    return res.json({ success: true, message: "Wallet successfully linked!" });
+  } catch (err: any) {
+    console.error("[ONBOARD-WALLET] Submit exception:", err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
