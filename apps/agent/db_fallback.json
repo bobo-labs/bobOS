@@ -1,0 +1,15 @@
+{
+  "users": [
+    {
+      "user_id": "test-whale-uuid",
+      "solana_wallet": "B6c7ZsbA5yR3s65N9i6h8D9eL8G4uK3jH2fP1oQ5rT8y",
+      "token_balance": 1500000,
+      "point_one_verified": true,
+      "point_two_convinced": false,
+      "point_two_bribed": false,
+      "roast_published": false
+    }
+  ],
+  "proposals": [],
+  "votes": []
+}

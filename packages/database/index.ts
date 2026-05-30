@@ -118,8 +118,14 @@ function executeFallbackQuery(commandType: string, commandArgs: any[], chain: an
         if (tableName === 'votes' && !copy.id) {
           copy.id = crypto.randomUUID();
         }
+        if (tableName === 'cc_linked_accounts' && !copy.id) {
+          copy.id = crypto.randomUUID();
+        }
         if (!copy.created_at) {
           copy.created_at = new Date().toISOString();
+        }
+        if (!copy.updated_at && tableName === 'cc_linked_accounts') {
+          copy.updated_at = new Date().toISOString();
         }
         // Enforce uniqueness constraints locally (e.g. proposal_voter_idx)
         if (tableName === 'votes') {

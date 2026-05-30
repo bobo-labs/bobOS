@@ -13,7 +13,7 @@
 import "dotenv/config"; // ← Must be first: loads .env before Pool is created
 import express from "express";
 import cors from "cors";
-import { db, users, proposals, votes } from "@bobos/database";
+import { db, users, proposals, votes, ccLinkedAccounts } from "@bobos/database";
 import { eq, sql } from "drizzle-orm";
 import OAuth from "oauth-1.0a";
 import crypto from "crypto";
@@ -2458,34 +2458,158 @@ app.post("/clear-history", async (req, res) => {
 // ─── Poller logic ─────────────────────────────────────────────────────────────
 const processedTweets = new Set<string>();
 
+// ─── CC Token Management ──────────────────────────────────────────────────────
+
+/** Decode the exp claim from a JWT without verifying signature */
+function getJwtExpiry(token: string): Date {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
+    return new Date(payload.exp * 1000);
+  } catch {
+    return new Date(Date.now() + 2 * 24 * 60 * 60 * 1000); // fallback: 2 days
+  }
+}
+
+/** Call CC's refresh endpoint (uses api_key_auth, not user JWT) */
+async function refreshCCTokens(refreshToken: string): Promise<{ accessToken: string; refreshToken: string } | null> {
+  try {
+    configureApi({
+      baseUrl: "https://api.coin-communities.xyz",
+      headers: { "x-api-key": process.env.CC_API_KEY || "" }
+    });
+    const res = await api.refreshToken({ body: { refreshToken } });
+    // Restore server credentials
+    if (ccServerKey && ccServerSecret) {
+      configureApi({ baseUrl: "https://api.coin-communities.xyz", headers: { "x-server-key": ccServerKey, "x-server-secret": ccServerSecret } });
+    }
+    if (res.error || !res.data) {
+      console.error("[CC_TOKENS] Refresh failed:", res.error);
+      return null;
+    }
+    return { accessToken: res.data.accessToken, refreshToken: res.data.refreshToken };
+  } catch (err) {
+    console.error("[CC_TOKENS] Refresh exception:", err);
+    return null;
+  }
+}
+
+/** Get a valid (non-expired) access token for a twitter_id, auto-refreshing if needed */
+async function getValidCCToken(twitterId: string): Promise<string | null> {
+  try {
+    const [account] = await db.select().from(ccLinkedAccounts).where(eq(ccLinkedAccounts.twitter_id as any, twitterId as any) as any);
+    if (!account) {
+      console.warn(`[CC_TOKENS] No linked CC account for Twitter ID ${twitterId}. Visit /onboard to connect.`);
+      return null;
+    }
+    // Refresh if expiring within 5 minutes
+    const expiresAt = new Date(account.expires_at);
+    if (expiresAt.getTime() - Date.now() < 5 * 60 * 1000) {
+      console.log(`[CC_TOKENS] Token for ${twitterId} expires at ${expiresAt.toISOString()} — refreshing...`);
+      const newTokens = await refreshCCTokens(account.refresh_token);
+      if (!newTokens) return null;
+      const newExpiry = getJwtExpiry(newTokens.accessToken);
+      await db.update(ccLinkedAccounts)
+        .set({ access_token: newTokens.accessToken, refresh_token: newTokens.refreshToken, expires_at: newExpiry, updated_at: new Date() })
+        .where(eq(ccLinkedAccounts.twitter_id as any, twitterId as any) as any);
+      console.log(`[CC_TOKENS] Tokens refreshed for ${twitterId}. New expiry: ${newExpiry.toISOString()}`);
+      return newTokens.accessToken;
+    }
+    return account.access_token;
+  } catch (err) {
+    console.error("[CC_TOKENS] getValidCCToken error:", err);
+    return null;
+  }
+}
+
+/** Insert or update a CC account record */
+async function upsertCCLinkedAccount(data: {
+  twitter_id: string; twitter_username?: string | null;
+  access_token: string; refresh_token: string; wallet_address?: string | null;
+}) {
+  const expires_at = getJwtExpiry(data.access_token);
+  const [existing] = await db.select().from(ccLinkedAccounts).where(eq(ccLinkedAccounts.twitter_id as any, data.twitter_id as any) as any);
+  if (existing) {
+    await db.update(ccLinkedAccounts)
+      .set({
+        twitter_username: data.twitter_username ?? existing.twitter_username,
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+        expires_at,
+        wallet_address: data.wallet_address ?? existing.wallet_address,
+        updated_at: new Date()
+      })
+      .where(eq(ccLinkedAccounts.twitter_id as any, data.twitter_id as any) as any);
+    console.log(`[CC_TOKENS] Updated account for @${data.twitter_username ?? data.twitter_id}`);
+  } else {
+    await db.insert(ccLinkedAccounts).values({
+      twitter_id: data.twitter_id,
+      twitter_username: data.twitter_username ?? null,
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at,
+      wallet_address: data.wallet_address ?? null,
+    });
+    console.log(`[CC_TOKENS] Created account for @${data.twitter_username ?? data.twitter_id}`);
+  }
+}
+
+/** On startup: seed the DB from env vars if TWITTER_USER_ID + USER_ACCESS_TOKEN + CC_REFRESH_TOKEN are present */
+async function seedCCAccountFromEnv() {
+  const twitterId = process.env.TWITTER_USER_ID;
+  const accessToken = process.env.USER_ACCESS_TOKEN;
+  const refreshToken = process.env.CC_REFRESH_TOKEN;
+  if (!twitterId || !accessToken || !refreshToken) {
+    console.log("[CC_TOKENS] Skipping env seed (set TWITTER_USER_ID + USER_ACCESS_TOKEN + CC_REFRESH_TOKEN to enable).");
+    return;
+  }
+  await upsertCCLinkedAccount({ twitter_id: twitterId, access_token: accessToken, refresh_token: refreshToken });
+  console.log(`[CC_TOKENS] Seeded account from env for Twitter ID ${twitterId}`);
+}
+
 async function forwardTweetInternally(params: { tweetId: string; tweetText: string; twitterId: string }): Promise<boolean> {
   try {
     const tokenAddress = process.env.CC_TOKEN_ADDRESS || process.env.AGENT_TOKEN_MINT || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
     const formattedContent = `${params.tweetText}\n\n🔗 Original tweet: https://x.com/i/web/status/${params.tweetId}`;
-    let response;
 
-    // Always use server-key path so the twitterId correctly identifies the author.
-    // Using USER_ACCESS_TOKEN here would post as the token owner regardless of who tweeted.
-    {
-      console.log(`[POLLER] Using server credentials to post to room ${tokenAddress} on behalf of Twitter ID ${params.twitterId}`);
-      const finalWalletAddress = process.env.AGENT_WALLET_ADDRESS || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
-      
-      response = await api.postMessageServer({
-        path: { token_address: tokenAddress },
-        body: {
-          content: formattedContent,
-          twitterId: params.twitterId,
-          chainId: "solana",
-          walletAddress: finalWalletAddress,
-        },
-      });
+    // Get a fresh, valid CC token for this specific Twitter user
+    const accessToken = await getValidCCToken(params.twitterId);
+    if (!accessToken) {
+      console.error(`[POLLER] No valid CC token for Twitter ID ${params.twitterId}. Have them visit /onboard.`);
+      return false;
+    }
+
+    configureApi({
+      baseUrl: "https://api.coin-communities.xyz",
+      headers: { "x-api-key": process.env.CC_API_KEY || "", "Authorization": `Bearer ${accessToken}` }
+    });
+
+    // Fetch the wallet linked to this CC account
+    let finalWalletAddress = process.env.AGENT_WALLET_ADDRESS || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
+    try {
+      const walletsRes = await api.getWallets({});
+      const wallets = walletsRes.data?.wallets || [];
+      if (wallets.length > 0) {
+        finalWalletAddress = wallets[0].address;
+        console.log(`[POLLER] Using linked wallet: ${finalWalletAddress}`);
+      }
+    } catch (err) {
+      console.error("[POLLER] Failed to fetch wallets, using fallback:", err);
+    }
+
+    const response = await api.postMessage({
+      path: { token_address: tokenAddress },
+      body: { content: formattedContent, chainId: "solana", walletAddress: finalWalletAddress },
+    });
+
+    // Restore server key credentials
+    if (ccServerKey && ccServerSecret) {
+      configureApi({ baseUrl: "https://api.coin-communities.xyz", headers: { "x-server-key": ccServerKey, "x-server-secret": ccServerSecret } });
     }
 
     if (response.error) {
       console.error("[POLLER] Post failed:", response.error);
       return false;
     }
-
     console.log(`[POLLER] Tweet ${params.tweetId} forwarded successfully!`);
     return true;
   } catch (error) {
@@ -2822,17 +2946,167 @@ export async function startTwitterFilteredStream() {
   await connect();
 }
 
+// ─── Onboard — CC OAuth flow ──────────────────────────────────────────────────
+
+app.get("/onboard", (_req, res) => {
+  const baseUrl = process.env.AGENT_PUBLIC_URL || "https://agent-production-6e6f.up.railway.app";
+  res.setHeader("Content-Type", "text/html");
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Connect to Bobo Community</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Space+Mono&display=swap" rel="stylesheet">
+  <style>
+    :root { --bg:#0B0D17; --accent:#F97316; --cyan:#22D3EE; --text:#F3F4F6; --muted:#9CA3AF; --card:rgba(255,255,255,0.04); --border:rgba(255,255,255,0.08); }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:'Outfit',sans-serif; background:var(--bg); background-image:radial-gradient(circle at 15% 20%,rgba(249,115,22,.12) 0%,transparent 45%),radial-gradient(circle at 85% 80%,rgba(34,211,238,.08) 0%,transparent 45%); color:var(--text); min-height:100vh; display:flex; align-items:center; justify-content:center; padding:2rem; }
+    .card { max-width:500px; width:100%; background:var(--card); border:1px solid var(--border); border-radius:24px; padding:3rem 2.5rem; box-shadow:0 24px 60px rgba(0,0,0,.6); animation:up .7s ease-out; }
+    @keyframes up { from{opacity:0;transform:translateY(24px)} to{opacity:1;transform:translateY(0)} }
+    .bear { font-size:3.5rem; text-align:center; margin-bottom:1rem; }
+    h1 { font-size:2rem; font-weight:800; text-align:center; background:linear-gradient(135deg,#fff 30%,var(--cyan)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; margin-bottom:.5rem; }
+    .sub { text-align:center; color:var(--muted); font-size:.95rem; line-height:1.6; margin-bottom:2rem; }
+    .feature { display:flex; align-items:flex-start; gap:.75rem; margin-bottom:1rem; }
+    .feature-icon { font-size:1.25rem; margin-top:.1rem; }
+    .feature-text { font-size:.875rem; color:var(--muted); line-height:1.5; }
+    .feature-text strong { color:var(--text); }
+    .divider { border:none; border-top:1px solid var(--border); margin:1.75rem 0; }
+    .btn { display:block; width:100%; padding:1rem; border-radius:14px; border:none; font-family:inherit; font-size:1.05rem; font-weight:700; cursor:pointer; text-decoration:none; text-align:center; background:linear-gradient(135deg,var(--accent),#FB923C); color:white; transition:all .2s; box-shadow:0 4px 20px rgba(249,115,22,.35); }
+    .btn:hover { transform:translateY(-2px); box-shadow:0 8px 30px rgba(249,115,22,.5); }
+    .note { text-align:center; font-size:.75rem; color:var(--muted); margin-top:1rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="bear">🐻</div>
+    <h1>Join Bobo's Feed</h1>
+    <p class="sub">Connect your Coin Communities account to automatically share your tweets with the BOBO community.</p>
+    <div class="feature"><span class="feature-icon">⚡</span><div class="feature-text"><strong>Real-time forwarding</strong> — Your tweets appear in the community room within seconds.</div></div>
+    <div class="feature"><span class="feature-icon">🔄</span><div class="feature-text"><strong>Auto token refresh</strong> — Your connection stays active without manual renewal.</div></div>
+    <div class="feature"><span class="feature-icon">🔐</span><div class="feature-text"><strong>Non-custodial</strong> — Only tweet forwarding, nothing else. Revoke anytime from CC settings.</div></div>
+    <hr class="divider">
+    <a class="btn" href="${baseUrl}/onboard/start">Connect with Coin Communities →</a>
+    <p class="note">You'll be redirected to Coin Communities to authorize with your Twitter account.</p>
+  </div>
+</body>
+</html>`);
+});
+
+app.get("/onboard/start", async (_req, res) => {
+  try {
+    const baseUrl = process.env.AGENT_PUBLIC_URL || "https://agent-production-6e6f.up.railway.app";
+    const redirectUrl = `${baseUrl}/onboard/callback`;
+    configureApi({ baseUrl: "https://api.coin-communities.xyz", headers: { "x-api-key": process.env.CC_API_KEY || "" } });
+    const result = await api.twitterAuthUrl({ query: { redirectUrl } });
+    if (ccServerKey && ccServerSecret) {
+      configureApi({ baseUrl: "https://api.coin-communities.xyz", headers: { "x-server-key": ccServerKey, "x-server-secret": ccServerSecret } });
+    }
+    if (result.error || !result.data?.authUrl) {
+      console.error("[ONBOARD] Failed to get auth URL:", result.error);
+      return res.status(500).send("Failed to get auth URL from Coin Communities: " + JSON.stringify(result.error));
+    }
+    console.log("[ONBOARD] Redirecting user to CC auth URL...");
+    return res.redirect(result.data.authUrl);
+  } catch (err: any) {
+    console.error("[ONBOARD] Exception in /onboard/start:", err);
+    return res.status(500).send("Internal error: " + err.message);
+  }
+});
+
+app.get("/onboard/callback", async (req, res) => {
+  const { code, codeVerifier, code_verifier } = req.query as Record<string, string>;
+  const verifier = codeVerifier || code_verifier || "";
+  if (!code) {
+    console.error("[ONBOARD] Callback missing code param. Query:", req.query);
+    return res.status(400).send("Missing code parameter from Coin Communities.");
+  }
+  try {
+    configureApi({ baseUrl: "https://api.coin-communities.xyz", headers: { "x-api-key": process.env.CC_API_KEY || "" } });
+    const result = await api.twitterCallback({ body: { code, codeVerifier: verifier } });
+    if (ccServerKey && ccServerSecret) {
+      configureApi({ baseUrl: "https://api.coin-communities.xyz", headers: { "x-server-key": ccServerKey, "x-server-secret": ccServerSecret } });
+    }
+    if (result.error || !result.data) {
+      console.error("[ONBOARD] Token exchange failed:", result.error);
+      return res.status(500).send("Token exchange failed: " + JSON.stringify(result.error));
+    }
+    const { accessToken, refreshToken, user } = result.data;
+    const { twitterId, username } = user;
+    await upsertCCLinkedAccount({ twitter_id: twitterId, twitter_username: username, access_token: accessToken, refresh_token: refreshToken });
+    console.log(`[ONBOARD] ✅ @${username} (Twitter ID: ${twitterId}) successfully onboarded!`);
+    res.setHeader("Content-Type", "text/html");
+    return res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Connected! — Bobo Community</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:'Outfit',sans-serif; background:#0B0D17; color:#F3F4F6; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:2rem; }
+    .card { max-width:460px; width:100%; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:24px; padding:3rem 2.5rem; text-align:center; box-shadow:0 24px 60px rgba(0,0,0,.6); animation:up .7s ease-out; }
+    @keyframes up { from{opacity:0;transform:translateY(24px)} to{opacity:1;transform:translateY(0)} }
+    .checkmark { font-size:3.5rem; margin-bottom:1rem; }
+    h1 { font-size:1.75rem; font-weight:800; background:linear-gradient(135deg,#fff 30%,#10B981); -webkit-background-clip:text; -webkit-text-fill-color:transparent; margin-bottom:.5rem; }
+    .handle { font-size:1.1rem; color:#22D3EE; font-weight:600; margin-bottom:1rem; }
+    p { color:#9CA3AF; font-size:.9rem; line-height:1.6; }
+    .pill { display:inline-block; background:rgba(16,185,129,.1); color:#10B981; border-radius:9999px; padding:.25rem .9rem; font-size:.75rem; font-weight:600; margin-top:1.5rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="checkmark">✅</div>
+    <h1>You're Connected!</h1>
+    <div class="handle">@${username}</div>
+    <p>Your tweets will now be automatically forwarded to the BOBO community room on Coin Communities. You can close this tab.</p>
+    <div class="pill">Auto-refresh active · No expiry worries</div>
+  </div>
+</body>
+</html>`);
+  } catch (err: any) {
+    console.error("[ONBOARD] Callback exception:", err);
+    return res.status(500).send("Internal error: " + err.message);
+  }
+});
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.SERVER_PORT || "3001");
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`[Bobo Agent] Custom Express server running on port ${PORT}`);
   console.log(`[Bobo Agent] Endpoints:`);
   console.log(`  GET  http://localhost:${PORT}/agents`);
   console.log(`  POST http://localhost:${PORT}/:agentId/message`);
   console.log(`  POST http://localhost:${PORT}/ping-wallet`);
+  console.log(`  GET  http://localhost:${PORT}/onboard  ← CC OAuth onboarding`);
 
-  // Start the internal streaming listener
+  // Auto-create cc_linked_accounts table if it doesn't exist
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS cc_linked_accounts (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        twitter_id VARCHAR(32) NOT NULL UNIQUE,
+        twitter_username VARCHAR(100),
+        access_token TEXT NOT NULL,
+        refresh_token TEXT NOT NULL,
+        expires_at TIMESTAMP NOT NULL,
+        wallet_address VARCHAR(100),
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS cc_linked_accounts_twitter_id_idx ON cc_linked_accounts (twitter_id);
+    `);
+    console.log("[DB] cc_linked_accounts table ready.");
+  } catch (err: any) {
+    console.warn("[DB] Could not auto-create cc_linked_accounts:", err.message);
+  }
+
+  // Seed bobo__os account from env tokens
+  await seedCCAccountFromEnv().catch(err => console.error("[CC_TOKENS] Seed failed:", err));
+
+  // Start the real-time stream
   startTwitterFilteredStream().catch(err => {
     console.error("[POLLER] Failed to start:", err);
   });
 });
+
