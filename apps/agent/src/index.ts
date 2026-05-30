@@ -23,6 +23,7 @@ import { fileURLToPath } from "url";
 import nacl from "tweetnacl";
 import bs58 from "bs58";
 import { configureApi, api } from "@coin-communities/sdk";
+import Parser from "rss-parser";
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1032,6 +1033,87 @@ app.post("/api/forward-tweet", async (req, res) => {
     return res.status(500).json({ error: "Internal server error", message: error?.message });
   }
 });
+
+// X Activity API (XAA) Webhook - GET Challenge-Response Check (CRC)
+app.get("/api/twitter-webhook", (req, res) => {
+  const crcToken = req.query.crc_token as string;
+  if (!crcToken) {
+    return res.status(400).json({ error: "Missing crc_token parameter" });
+  }
+
+  const consumerSecret = process.env.TWITTER_API_SECRET_KEY;
+  if (!consumerSecret) {
+    console.error("[TWITTER CRC] Consumer secret is missing in environment.");
+    return res.status(500).json({ error: "Configuration error" });
+  }
+
+  try {
+    const hmac = crypto.createHmac("sha256", consumerSecret).update(crcToken).digest("base64");
+    console.log(`[TWITTER CRC] Verification succeeded for token: ${crcToken}`);
+    return res.status(200).json({
+      response_token: `sha256=${hmac}`
+    });
+  } catch (error: any) {
+    console.error("[TWITTER CRC] Exception calculating hmac:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// X Activity API (XAA) Webhook - POST Event Processor
+app.post("/api/twitter-webhook", async (req, res) => {
+  try {
+    // Acknowledge receipt immediately to avoid X timeout (3-second limit)
+    res.status(200).send("OK");
+
+    const payload = req.body;
+
+    if (!payload || !payload.tweet_create_events || !Array.isArray(payload.tweet_create_events)) {
+      return;
+    }
+
+    const twitterUserId = process.env.TWITTER_USER_ID;
+    if (!twitterUserId) {
+      console.warn("[TWITTER WEBHOOK] Received events but TWITTER_USER_ID is not set in env.");
+      return;
+    }
+
+    for (const tweet of payload.tweet_create_events) {
+      const authorId = tweet.user?.id_str;
+
+      // Filter: only tweets from our account
+      if (authorId !== twitterUserId) {
+        continue;
+      }
+
+      // Filter out standard retweets and replies
+      const isRetweet = !!tweet.retweeted_status;
+      const isReply = !!tweet.in_reply_to_status_id;
+
+      if (isRetweet || isReply) {
+        console.log(`[TWITTER WEBHOOK] Ignoring retweet or reply: ${tweet.id_str}`);
+        continue;
+      }
+
+      console.log(`[TWITTER WEBHOOK] Processing new tweet from ${tweet.user?.screen_name}: ${tweet.id_str} — "${tweet.text}"`);
+
+      // Forward to Coin Communities
+      const success = await forwardTweetInternally({
+        tweetId: tweet.id_str,
+        tweetText: tweet.text || "",
+        twitterId: authorId,
+      });
+
+      if (success) {
+        console.log(`[TWITTER WEBHOOK] Successfully forwarded tweet ${tweet.id_str} to Coin Communities!`);
+      } else {
+        console.error(`[TWITTER WEBHOOK] Failed to forward tweet ${tweet.id_str}`);
+      }
+    }
+  } catch (error) {
+    console.error("[TWITTER WEBHOOK] Error processing incoming payload:", error);
+  }
+});
+
 
 // serving local interactive HTML page for linking developer wallets securely
 app.get("/link-wallet", (_req, res) => {
@@ -2373,6 +2455,142 @@ app.post("/clear-history", async (req, res) => {
   return res.json({ ok: true });
 });
 
+// ─── Poller logic ─────────────────────────────────────────────────────────────
+const rssParser = new Parser();
+const processedTweets = new Set<string>();
+
+async function forwardTweetInternally(params: { tweetId: string; tweetText: string; twitterId: string }): Promise<boolean> {
+  try {
+    const userAccessToken = process.env.USER_ACCESS_TOKEN;
+    if (!userAccessToken) {
+      console.error("[POLLER] USER_ACCESS_TOKEN is missing in env. Cannot forward.");
+      return false;
+    }
+
+    const tokenAddress = process.env.CC_TOKEN_ADDRESS || process.env.AGENT_TOKEN_MINT || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
+    const formattedContent = `${params.tweetText}\n\n🔗 Original tweet: https://x.com/i/web/status/${params.tweetId}`;
+
+    configureApi({
+      baseUrl: "https://api.coin-communities.xyz",
+      headers: {
+        "x-api-key": process.env.CC_API_KEY || "",
+        "Authorization": `Bearer ${userAccessToken.trim()}`
+      }
+    });
+
+    // Fetch linked wallets dynamically
+    let finalWalletAddress = "";
+    try {
+      const walletsRes = await api.getWallets({});
+      const wallets = walletsRes.data?.wallets || [];
+      if (wallets.length > 0) {
+        finalWalletAddress = wallets[0].address;
+      }
+    } catch (err) {
+      console.error("[POLLER] Failed to fetch linked wallets:", err);
+    }
+
+    if (!finalWalletAddress) {
+      finalWalletAddress = process.env.AGENT_WALLET_ADDRESS || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
+      console.warn(`[POLLER] No linked wallets found. Falling back to: ${finalWalletAddress}`);
+    }
+
+    console.log(`[POLLER] Posting client-side message to room ${tokenAddress} using wallet ${finalWalletAddress}`);
+
+    const response = await api.postMessage({
+      path: { token_address: tokenAddress },
+      body: {
+        content: formattedContent,
+        chainId: "solana",
+        walletAddress: finalWalletAddress,
+      },
+    });
+
+    // Restore server key credentials
+    if (ccServerKey && ccServerSecret) {
+      configureApi({
+        baseUrl: "https://api.coin-communities.xyz",
+        headers: {
+          "x-server-key": ccServerKey,
+          "x-server-secret": ccServerSecret,
+        },
+      });
+    }
+
+    if (response.error) {
+      console.error("[POLLER] Post failed:", response.error);
+      return false;
+    }
+
+    console.log(`[POLLER] Tweet ${params.tweetId} forwarded successfully!`);
+    return true;
+  } catch (error) {
+    console.error("[POLLER] Internal error forwarding tweet:", error);
+    return false;
+  }
+}
+
+function extractTweetIdFromUrl(url: string): string | null {
+  const match = url.match(/\/status\/(\d+)/);
+  return match ? match[1] : null;
+}
+
+async function startTwitterRssPoller() {
+  const rssUrl = process.env.TWITTER_RSS_FEED_URL;
+  if (!rssUrl) {
+    console.log("[POLLER] No TWITTER_RSS_FEED_URL configured. Poller is inactive.");
+    return;
+  }
+
+  console.log(`[POLLER] Initializing Twitter RSS poller for: ${rssUrl}`);
+
+  // Populate history first to prevent double-posting on server restarts
+  try {
+    const feed = await rssParser.parseURL(rssUrl);
+    for (const item of feed.items) {
+      if (item.link) {
+        const tweetId = extractTweetIdFromUrl(item.link);
+        if (tweetId) {
+          processedTweets.add(tweetId);
+        }
+      }
+    }
+    console.log(`[POLLER] Initialized with ${processedTweets.size} historical tweets.`);
+  } catch (err) {
+    console.error("[POLLER] Failed to initialize history from RSS feed:", err);
+  }
+
+  // Poll every 60 seconds (1 minute)
+  const POLL_INTERVAL_MS = 60000;
+  setInterval(async () => {
+    try {
+      const feed = await rssParser.parseURL(rssUrl);
+      const itemsToProcess = [...feed.items].reverse();
+
+      for (const item of itemsToProcess) {
+        if (!item.link) continue;
+        
+        const tweetId = extractTweetIdFromUrl(item.link);
+        if (!tweetId || processedTweets.has(tweetId)) continue;
+
+        console.log(`[POLLER] Found new tweet: ${tweetId} - "${item.title || ''}"`);
+
+        const success = await forwardTweetInternally({
+          tweetId,
+          tweetText: item.title || item.contentSnippet || "",
+          twitterId: process.env.TWITTER_USER_ID || "1747088288903581696",
+        });
+
+        if (success) {
+          processedTweets.add(tweetId);
+        }
+      }
+    } catch (err) {
+      console.error("[POLLER] Error polling RSS feed:", err);
+    }
+  }, POLL_INTERVAL_MS);
+}
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.SERVER_PORT || "3001");
 app.listen(PORT, () => {
@@ -2381,4 +2599,9 @@ app.listen(PORT, () => {
   console.log(`  GET  http://localhost:${PORT}/agents`);
   console.log(`  POST http://localhost:${PORT}/:agentId/message`);
   console.log(`  POST http://localhost:${PORT}/ping-wallet`);
+
+  // Start the internal polling loop
+  startTwitterRssPoller().catch(err => {
+    console.error("[POLLER] Failed to start:", err);
+  });
 });
