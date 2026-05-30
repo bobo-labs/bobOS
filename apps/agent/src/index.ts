@@ -2460,58 +2460,70 @@ const processedTweets = new Set<string>();
 
 async function forwardTweetInternally(params: { tweetId: string; tweetText: string; twitterId: string }): Promise<boolean> {
   try {
-    const userAccessToken = process.env.USER_ACCESS_TOKEN;
-    if (!userAccessToken) {
-      console.error("[POLLER] USER_ACCESS_TOKEN is missing in env. Cannot forward.");
-      return false;
-    }
-
     const tokenAddress = process.env.CC_TOKEN_ADDRESS || process.env.AGENT_TOKEN_MINT || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
     const formattedContent = `${params.tweetText}\n\n🔗 Original tweet: https://x.com/i/web/status/${params.tweetId}`;
+    const userAccessToken = process.env.USER_ACCESS_TOKEN;
+    let response;
 
-    configureApi({
-      baseUrl: "https://api.coin-communities.xyz",
-      headers: {
-        "x-api-key": process.env.CC_API_KEY || "",
-        "Authorization": `Bearer ${userAccessToken.trim()}`
-      }
-    });
-
-    // Fetch linked wallets dynamically
-    let finalWalletAddress = "";
-    try {
-      const walletsRes = await api.getWallets({});
-      const wallets = walletsRes.data?.wallets || [];
-      if (wallets.length > 0) {
-        finalWalletAddress = wallets[0].address;
-      }
-    } catch (err) {
-      console.error("[POLLER] Failed to fetch linked wallets:", err);
-    }
-
-    if (!finalWalletAddress) {
-      finalWalletAddress = process.env.AGENT_WALLET_ADDRESS || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
-      console.warn(`[POLLER] No linked wallets found. Falling back to: ${finalWalletAddress}`);
-    }
-
-    console.log(`[POLLER] Posting client-side message to room ${tokenAddress} using wallet ${finalWalletAddress}`);
-
-    const response = await api.postMessage({
-      path: { token_address: tokenAddress },
-      body: {
-        content: formattedContent,
-        chainId: "solana",
-        walletAddress: finalWalletAddress,
-      },
-    });
-
-    // Restore server key credentials
-    if (ccServerKey && ccServerSecret) {
+    if (userAccessToken && userAccessToken.trim() !== "") {
+      console.log(`[POLLER] Using user access token for client-side posting to room ${tokenAddress}`);
       configureApi({
         baseUrl: "https://api.coin-communities.xyz",
         headers: {
-          "x-server-key": ccServerKey,
-          "x-server-secret": ccServerSecret,
+          "x-api-key": process.env.CC_API_KEY || "",
+          "Authorization": `Bearer ${userAccessToken.trim()}`
+        }
+      });
+
+      // Fetch linked wallets dynamically
+      let finalWalletAddress = "";
+      try {
+        const walletsRes = await api.getWallets({});
+        const wallets = walletsRes.data?.wallets || [];
+        if (wallets.length > 0) {
+          finalWalletAddress = wallets[0].address;
+        }
+      } catch (err) {
+        console.error("[POLLER] Failed to fetch linked wallets:", err);
+      }
+
+      if (!finalWalletAddress) {
+        finalWalletAddress = process.env.AGENT_WALLET_ADDRESS || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
+        console.warn(`[POLLER] No linked wallets found. Falling back to: ${finalWalletAddress}`);
+      }
+
+      console.log(`[POLLER] Posting client-side message to room ${tokenAddress} using wallet ${finalWalletAddress}`);
+
+      response = await api.postMessage({
+        path: { token_address: tokenAddress },
+        body: {
+          content: formattedContent,
+          chainId: "solana",
+          walletAddress: finalWalletAddress,
+        },
+      });
+
+      // Restore server key credentials
+      if (ccServerKey && ccServerSecret) {
+        configureApi({
+          baseUrl: "https://api.coin-communities.xyz",
+          headers: {
+            "x-server-key": ccServerKey,
+            "x-server-secret": ccServerSecret,
+          },
+        });
+      }
+    } else {
+      console.log(`[POLLER] Using server credentials to post to room ${tokenAddress} on behalf of Twitter ID ${params.twitterId}`);
+      const finalWalletAddress = process.env.AGENT_WALLET_ADDRESS || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
+      
+      response = await api.postMessageServer({
+        path: { token_address: tokenAddress },
+        body: {
+          content: formattedContent,
+          twitterId: params.twitterId,
+          chainId: "solana",
+          walletAddress: finalWalletAddress,
         },
       });
     }
