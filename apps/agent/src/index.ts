@@ -1046,6 +1046,7 @@ app.get("/api/twitter-webhook", (req, res) => {
     console.error("[TWITTER CRC] Consumer secret is missing in environment.");
     return res.status(500).json({ error: "Configuration error" });
   }
+  console.log("[TWITTER CRC] Consumer secret loaded. Length:", consumerSecret.length);
 
   try {
     const hmac = crypto.createHmac("sha256", consumerSecret).update(crcToken).digest("base64");
