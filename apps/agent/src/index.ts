@@ -996,6 +996,8 @@ app.post("/api/forward-tweet", async (req, res) => {
         },
       });
 
+      console.log(`[FORWARDER] postMessage response: status=${response.response?.status}, data=${JSON.stringify(response.data)}, error=${JSON.stringify(response.error)}`);
+
       // Restore server credentials afterwards
       if (ccServerKey && ccServerSecret) {
         configureApi({
