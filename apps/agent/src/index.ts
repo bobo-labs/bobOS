@@ -3029,14 +3029,21 @@ app.get("/onboard/start", async (_req, res) => {
 });
 
 app.get("/onboard/callback", async (req, res) => {
-  const { code, codeVerifier, code_verifier } = req.query as Record<string, string>;
-  const verifier = codeVerifier || code_verifier || "";
+  console.log("[ONBOARD] Callback received. Full query params:", req.query);
+
+  // Coin Communities sends `challengeCode` (not the standard OAuth2 `code`).
+  // Support both naming conventions for resilience.
+  const query = req.query as Record<string, string>;
+  const code = query.code || query.challengeCode || "";
+  const verifier = query.codeVerifier || query.code_verifier || "";
+
   if (!code) {
-    console.error("[ONBOARD] Callback missing code param. Query:", req.query);
-    return res.status(400).send("Missing code parameter from Coin Communities.");
+    console.error("[ONBOARD] Callback missing code/challengeCode param. Query:", req.query);
+    return res.status(400).send("Missing code parameter from Coin Communities. Query received: " + JSON.stringify(req.query));
   }
   try {
     configureApi({ baseUrl: "https://api.coin-communities.xyz", headers: { "x-api-key": process.env.CC_API_KEY || "" } });
+    console.log("[ONBOARD] Exchanging code with CC API. code:", code, "verifier:", verifier || "(none)");
     const result = await api.twitterCallback({ body: { code, codeVerifier: verifier } });
     if (ccServerKey && ccServerSecret) {
       configureApi({ baseUrl: "https://api.coin-communities.xyz", headers: { "x-server-key": ccServerKey, "x-server-secret": ccServerSecret } });
