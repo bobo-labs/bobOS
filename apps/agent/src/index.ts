@@ -3043,8 +3043,11 @@ app.get("/onboard/callback", async (req, res) => {
   }
   try {
     configureApi({ baseUrl: "https://api.coin-communities.xyz", headers: { "x-api-key": process.env.CC_API_KEY || "" } });
-    console.log("[ONBOARD] Exchanging code with CC API. code:", code, "verifier:", verifier || "(none)");
-    const result = await api.twitterCallback({ body: { code, codeVerifier: verifier } });
+    // CC's flow: Twitter → CC backend (handles code exchange) → our callback with `challengeCode`
+    // We must call twitterChallengeExchange to redeem the challengeCode for tokens.
+    const challengeCode = code; // aliased for clarity
+    console.log("[ONBOARD] Redeeming challengeCode via CC API:", challengeCode);
+    const result = await api.twitterChallengeExchange({ body: { challengeCode } });
     if (ccServerKey && ccServerSecret) {
       configureApi({ baseUrl: "https://api.coin-communities.xyz", headers: { "x-server-key": ccServerKey, "x-server-secret": ccServerSecret } });
     }
