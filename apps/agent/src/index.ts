@@ -2732,15 +2732,29 @@ export async function setupTwitterStreamRules(usernames: string[], bearerToken: 
 }
 
 export async function startTwitterFilteredStream() {
-  const twitterUserId = process.env.TWITTER_USER_ID;
-  if (!twitterUserId) {
-    console.warn("[POLLER] No TWITTER_USER_ID configured. Filtered stream is inactive.");
-    return;
+  let userIds: string[] = [];
+
+  // Load from environment variable
+  const envTwitterUserId = process.env.TWITTER_USER_ID;
+  if (envTwitterUserId) {
+    const parsedEnvIds = envTwitterUserId.split(",").map(id => id.trim()).filter(Boolean);
+    userIds.push(...parsedEnvIds);
   }
 
-  const userIds = twitterUserId.split(",").map(id => id.trim()).filter(Boolean);
+  // Load from database table cc_linked_accounts
+  try {
+    const dbAccounts = await db.select().from(ccLinkedAccounts);
+    const dbUserIds = dbAccounts.map((a: any) => a.twitter_id).filter(Boolean);
+    userIds.push(...dbUserIds);
+  } catch (err: any) {
+    console.error("[POLLER] Failed to fetch user IDs from cc_linked_accounts:", err.message);
+  }
+
+  // De-duplicate user IDs
+  userIds = Array.from(new Set(userIds));
+
   if (userIds.length === 0) {
-    console.warn("[POLLER] No valid Twitter User IDs found in configuration.");
+    console.warn("[POLLER] No Twitter User IDs found (neither in environment nor DB). Filtered stream is inactive.");
     return;
   }
 
@@ -3035,6 +3049,12 @@ app.get("/onboard/callback", async (req, res) => {
     const { twitterId, username } = user;
     await upsertCCLinkedAccount({ twitter_id: twitterId, twitter_username: username, access_token: accessToken, refresh_token: refreshToken });
     console.log(`[ONBOARD] ✅ @${username} (Twitter ID: ${twitterId}) successfully onboarded!`);
+    
+    // Trigger dynamic reload of the Twitter stream rules to start tracking the new user
+    startTwitterFilteredStream().catch(err => {
+      console.error("[ONBOARD] Failed to reload Twitter stream rules:", err);
+    });
+
     res.setHeader("Content-Type", "text/html");
     return res.send(`<!DOCTYPE html>
 <html lang="en">
