@@ -23,7 +23,6 @@ import { fileURLToPath } from "url";
 import nacl from "tweetnacl";
 import bs58 from "bs58";
 import { configureApi, api } from "@coin-communities/sdk";
-import Parser from "rss-parser";
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -2457,7 +2456,6 @@ app.post("/clear-history", async (req, res) => {
 });
 
 // ─── Poller logic ─────────────────────────────────────────────────────────────
-const rssParser = new Parser();
 const processedTweets = new Set<string>();
 
 async function forwardTweetInternally(params: { tweetId: string; tweetText: string; twitterId: string }): Promise<boolean> {
@@ -2531,65 +2529,97 @@ async function forwardTweetInternally(params: { tweetId: string; tweetText: stri
   }
 }
 
-function extractTweetIdFromUrl(url: string): string | null {
-  const match = url.match(/\/status\/(\d+)/);
-  return match ? match[1] : null;
-}
-
-async function startTwitterRssPoller() {
-  const rssUrl = process.env.TWITTER_RSS_FEED_URL;
-  if (!rssUrl) {
-    console.log("[POLLER] No TWITTER_RSS_FEED_URL configured. Poller is inactive.");
+async function startTwitterApiPoller() {
+  const twitterUserId = process.env.TWITTER_USER_ID;
+  if (!twitterUserId) {
+    console.log("[POLLER] No TWITTER_USER_ID configured. Poller is inactive.");
     return;
   }
 
-  console.log(`[POLLER] Initializing Twitter RSS poller for: ${rssUrl}`);
+  const pollIntervalSec = parseInt(process.env.TWITTER_POLL_INTERVAL_SEC || "180");
+  console.log(`[POLLER] Initializing Twitter API poller for user ID: ${twitterUserId} every ${pollIntervalSec}s`);
+
+  const oauth = new OAuth({
+    consumer: {
+      key: process.env.TWITTER_API_KEY || "",
+      secret: process.env.TWITTER_API_SECRET_KEY || ""
+    },
+    signature_method: 'HMAC-SHA1',
+    hash_function(base_string, key) {
+      return crypto.createHmac('sha1', key).update(base_string).digest('base64');
+    }
+  });
+
+  const token = {
+    key: process.env.TWITTER_ACCESS_TOKEN || "",
+    secret: process.env.TWITTER_ACCESS_TOKEN_SECRET || ""
+  };
 
   // Populate history first to prevent double-posting on server restarts
   try {
-    const feed = await rssParser.parseURL(rssUrl);
-    for (const item of feed.items) {
-      if (item.link) {
-        const tweetId = extractTweetIdFromUrl(item.link);
-        if (tweetId) {
-          processedTweets.add(tweetId);
-        }
+    const url = `https://api.twitter.com/2/users/${twitterUserId}/tweets?max_results=5&tweet.fields=referenced_tweets,text`;
+    const requestData = { url, method: 'GET' };
+    const headers = oauth.toHeader(oauth.authorize(requestData, token)) as unknown as Record<string, string>;
+
+    const res = await fetch(url, { headers });
+    if (res.ok) {
+      const body = await res.json() as { data?: Array<{ id: string }> };
+      const tweets = body.data || [];
+      for (const tweet of tweets) {
+        processedTweets.add(tweet.id);
       }
+      console.log(`[POLLER] Initialized with ${processedTweets.size} historical tweets.`);
+    } else {
+      console.error("[POLLER] Failed to initialize history from X API:", await res.text());
     }
-    console.log(`[POLLER] Initialized with ${processedTweets.size} historical tweets.`);
   } catch (err) {
-    console.error("[POLLER] Failed to initialize history from RSS feed:", err);
+    console.error("[POLLER] Failed to initialize history from X API:", err);
   }
 
-  // Poll every 60 seconds (1 minute)
-  const POLL_INTERVAL_MS = 60000;
+  // Poll every pollIntervalSec seconds
   setInterval(async () => {
     try {
-      const feed = await rssParser.parseURL(rssUrl);
-      const itemsToProcess = [...feed.items].reverse();
+      const url = `https://api.twitter.com/2/users/${twitterUserId}/tweets?max_results=5&tweet.fields=referenced_tweets,text`;
+      const requestData = { url, method: 'GET' };
+      const headers = oauth.toHeader(oauth.authorize(requestData, token)) as unknown as Record<string, string>;
 
-      for (const item of itemsToProcess) {
-        if (!item.link) continue;
-        
-        const tweetId = extractTweetIdFromUrl(item.link);
-        if (!tweetId || processedTweets.has(tweetId)) continue;
+      const res = await fetch(url, { headers });
+      if (!res.ok) {
+        console.error("[POLLER] Error polling tweets from X API:", await res.text());
+        return;
+      }
 
-        console.log(`[POLLER] Found new tweet: ${tweetId} - "${item.title || ''}"`);
+      const body = await res.json() as { data?: Array<{ id: string; text: string; referenced_tweets?: Array<{ type: string }> }> };
+      const tweets = body.data || [];
+      const newTweets = tweets.filter(t => !processedTweets.has(t.id)).reverse();
+
+      for (const tweet of newTweets) {
+        const referenced = tweet.referenced_tweets || [];
+        const isRetweet = referenced.some(r => r.type === "retweeted");
+        const isReply = referenced.some(r => r.type === "replied_to");
+
+        if (isRetweet || isReply) {
+          processedTweets.add(tweet.id);
+          console.log(`[POLLER] Ignoring retweet or reply: ${tweet.id}`);
+          continue;
+        }
+
+        console.log(`[POLLER] Found new tweet: ${tweet.id} - "${tweet.text}"`);
 
         const success = await forwardTweetInternally({
-          tweetId,
-          tweetText: item.title || item.contentSnippet || "",
-          twitterId: process.env.TWITTER_USER_ID || "1747088288903581696",
+          tweetId: tweet.id,
+          tweetText: tweet.text || "",
+          twitterId: twitterUserId,
         });
 
         if (success) {
-          processedTweets.add(tweetId);
+          processedTweets.add(tweet.id);
         }
       }
     } catch (err) {
-      console.error("[POLLER] Error polling RSS feed:", err);
+      console.error("[POLLER] Error polling X API:", err);
     }
-  }, POLL_INTERVAL_MS);
+  }, pollIntervalSec * 1000);
 }
 
 // ─── Start ────────────────────────────────────────────────────────────────────
@@ -2602,7 +2632,7 @@ app.listen(PORT, () => {
   console.log(`  POST http://localhost:${PORT}/ping-wallet`);
 
   // Start the internal polling loop
-  startTwitterRssPoller().catch(err => {
+  startTwitterApiPoller().catch(err => {
     console.error("[POLLER] Failed to start:", err);
   });
 });
