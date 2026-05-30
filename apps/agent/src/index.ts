@@ -2565,24 +2565,27 @@ export async function getTwitterBearerToken(): Promise<string> {
   return data.access_token;
 }
 
-export async function getTwitterUsername(userId: string, bearerToken: string): Promise<string> {
-  const url = `https://api.twitter.com/2/users/${userId}`;
+export async function getTwitterUsernames(userIds: string[], bearerToken: string): Promise<Map<string, string>> {
+  const url = `https://api.twitter.com/2/users?ids=${userIds.join(",")}`;
   const res = await fetch(url, {
     headers: {
       "Authorization": `Bearer ${bearerToken}`
     }
   });
   if (!res.ok) {
-    throw new Error(`Failed to fetch user username for ID ${userId}: ${res.statusText} - ${await res.text()}`);
+    throw new Error(`Failed to fetch usernames for IDs ${userIds.join(",")}: ${res.statusText} - ${await res.text()}`);
   }
-  const body = await res.json() as { data?: { username: string } };
-  if (!body.data?.username) {
-    throw new Error(`User lookup response for ID ${userId} is missing username data.`);
+  const body = await res.json() as { data?: Array<{ id: string; username: string }> };
+  const mapping = new Map<string, string>();
+  if (body.data) {
+    for (const u of body.data) {
+      mapping.set(u.id, u.username);
+    }
   }
-  return body.data.username;
+  return mapping;
 }
 
-export async function setupTwitterStreamRules(username: string, bearerToken: string) {
+export async function setupTwitterStreamRules(usernames: string[], bearerToken: string) {
   const getUrl = "https://api.twitter.com/2/tweets/search/stream/rules";
   const postUrl = "https://api.twitter.com/2/tweets/search/stream/rules";
   
@@ -2596,19 +2599,16 @@ export async function setupTwitterStreamRules(username: string, bearerToken: str
   const getBody = await getRes.json() as { data?: Array<{ id: string; value: string; tag?: string }> };
   const currentRules = getBody.data || [];
   
-  const targetValue = `from:${username} -is:retweet -is:reply`;
-  const ruleExists = currentRules.some(r => r.value === targetValue);
-  
-  if (ruleExists) {
-    console.log(`[POLLER] Filter rule for ${username} already exists.`);
-    return;
+  // Map of target rule value -> username
+  const targetRules = new Map<string, string>();
+  for (const u of usernames) {
+    targetRules.set(`from:${u} -is:retweet -is:reply`, u);
   }
   
-  console.log(`[POLLER] Syncing stream rules. Existing rules found:`, currentRules.length);
-  
-  // 2. Delete existing rules if any exist
-  if (currentRules.length > 0) {
-    const ids = currentRules.map(r => r.id);
+  // Find rules to delete (rules currently registered but not in targetRules)
+  const rulesToDelete = currentRules.filter(r => !targetRules.has(r.value));
+  if (rulesToDelete.length > 0) {
+    const ids = rulesToDelete.map(r => r.id);
     const deleteRes = await fetch(postUrl, {
       method: "POST",
       headers: {
@@ -2620,37 +2620,50 @@ export async function setupTwitterStreamRules(username: string, bearerToken: str
       })
     });
     if (!deleteRes.ok) {
-      throw new Error(`Failed to delete old stream rules: ${await deleteRes.text()}`);
+      throw new Error(`Failed to delete obsolete stream rules: ${await deleteRes.text()}`);
     }
-    console.log(`[POLLER] Successfully deleted ${ids.length} old rules.`);
+    console.log(`[POLLER] Successfully deleted ${ids.length} obsolete rules.`);
   }
   
-  // 3. Add new rule
-  const addRes = await fetch(postUrl, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${bearerToken}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      add: [
-        {
-          value: targetValue,
-          tag: `posts by ${username}`
-        }
-      ]
-    })
-  });
-  if (!addRes.ok) {
-    throw new Error(`Failed to create stream rule: ${await addRes.text()}`);
+  // Find rules to add (targetRules not currently registered)
+  const currentValues = new Set(currentRules.map(r => r.value));
+  const rulesToAdd = Array.from(targetRules.entries())
+    .filter(([val]) => !currentValues.has(val))
+    .map(([val, u]) => ({
+      value: val,
+      tag: `posts by ${u}`
+    }));
+    
+  if (rulesToAdd.length > 0) {
+    const addRes = await fetch(postUrl, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${bearerToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        add: rulesToAdd
+      })
+    });
+    if (!addRes.ok) {
+      throw new Error(`Failed to create stream rules: ${await addRes.text()}`);
+    }
+    console.log(`[POLLER] Successfully created ${rulesToAdd.length} new stream rules.`);
   }
-  console.log(`[POLLER] Successfully created stream rule for ${username}.`);
+  
+  console.log(`[POLLER] Rules synced. Total active rules: ${targetRules.size}`);
 }
 
 export async function startTwitterFilteredStream() {
   const twitterUserId = process.env.TWITTER_USER_ID;
   if (!twitterUserId) {
     console.warn("[POLLER] No TWITTER_USER_ID configured. Filtered stream is inactive.");
+    return;
+  }
+
+  const userIds = twitterUserId.split(",").map(id => id.trim()).filter(Boolean);
+  if (userIds.length === 0) {
+    console.warn("[POLLER] No valid Twitter User IDs found in configuration.");
     return;
   }
 
@@ -2671,15 +2684,20 @@ export async function startTwitterFilteredStream() {
       console.log("[POLLER] Retrieving bearer token...");
       const bearerToken = await getTwitterBearerToken();
 
-      console.log(`[POLLER] Fetching username for user ID: ${twitterUserId}`);
-      const username = await getTwitterUsername(twitterUserId!, bearerToken);
-      console.log(`[POLLER] Resolved username: ${username}`);
+      console.log(`[POLLER] Fetching usernames for user IDs: ${userIds.join(", ")}`);
+      const userMap = await getTwitterUsernames(userIds, bearerToken);
+      const usernames = Array.from(userMap.values());
+      console.log(`[POLLER] Resolved usernames: ${usernames.join(", ")}`);
+
+      if (usernames.length === 0) {
+        throw new Error("No usernames resolved from X API. Rules setup aborted.");
+      }
 
       console.log("[POLLER] Configuring stream rules...");
-      await setupTwitterStreamRules(username, bearerToken);
+      await setupTwitterStreamRules(usernames, bearerToken);
 
       console.log("[POLLER] Connecting to X Filtered Stream...");
-      const streamUrl = "https://api.twitter.com/2/tweets/search/stream?tweet.fields=referenced_tweets,text";
+      const streamUrl = "https://api.twitter.com/2/tweets/search/stream?tweet.fields=referenced_tweets,text,author_id";
       const res = await fetch(streamUrl, {
         headers: { "Authorization": `Bearer ${bearerToken}` },
         signal
@@ -2790,7 +2808,7 @@ export async function startTwitterFilteredStream() {
       const tweet = payload.data;
       if (!tweet) return;
 
-      console.log(`[POLLER] Received stream tweet event: ${tweet.id} - "${tweet.text}"`);
+      console.log(`[POLLER] Received stream tweet event: ${tweet.id} - "${tweet.text}" (author: ${tweet.author_id})`);
 
       // De-duplicate check
       if (processedTweets.has(tweet.id)) {
@@ -2815,11 +2833,13 @@ export async function startTwitterFilteredStream() {
         return;
       }
 
+      const authorId = tweet.author_id || userIds[0];
+
       // Forward to Coin Communities
       forwardTweetInternally({
         tweetId: tweet.id,
         tweetText: tweet.text || "",
-        twitterId: twitterUserId!,
+        twitterId: authorId,
       }).then(success => {
         if (success) {
           console.log(`[POLLER] Successfully forwarded tweet ${tweet.id} from stream.`);

@@ -32,7 +32,7 @@ global.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
   }
 
   // 2. User Lookup request
-  if (urlStr.includes("/2/users/") && !urlStr.includes("/rules")) {
+  if (urlStr.includes("/2/users") && !urlStr.includes("/rules")) {
     console.log("[MOCK FETCH] Received User Lookup request.");
     return {
       ok: true,
@@ -40,8 +40,8 @@ global.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
       headers: {
         get: (name: string) => name === "content-type" ? "application/json" : null
       },
-      json: async () => ({ data: { username: "mocked_bobo_user" } }),
-      text: async () => JSON.stringify({ data: { username: "mocked_bobo_user" } })
+      json: async () => ({ data: [ { id: "1747088288903581696", username: "mocked_bobo_user" } ] }),
+      text: async () => JSON.stringify({ data: [ { id: "1747088288903581696", username: "mocked_bobo_user" } ] })
     } as any;
   }
 
@@ -148,7 +148,8 @@ async function runTest() {
       data: {
         id: "123456789012345",
         text: "Hello World! This is a test tweet from my automated bot. #bobo",
-        referenced_tweets: []
+        referenced_tweets: [],
+        author_id: "1747088288903581696"
       }
     };
     activeStreamInstance.push(JSON.stringify(tweetPayload) + "\n");
