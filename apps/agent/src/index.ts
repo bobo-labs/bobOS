@@ -2789,7 +2789,10 @@ export async function startTwitterFilteredStream() {
       await setupTwitterStreamRules(usernames, bearerToken);
 
       console.log("[POLLER] Connecting to X Filtered Stream...");
-      const streamUrl = "https://api.twitter.com/2/tweets/search/stream?tweet.fields=referenced_tweets,text,author_id";
+      const streamUrl = "https://api.twitter.com/2/tweets/search/stream" +
+        "?tweet.fields=referenced_tweets,text,author_id,attachments" +
+        "&expansions=attachments.media_keys" +
+        "&media.fields=url,preview_image_url,type,media_key";
       const res = await fetch(streamUrl, {
         headers: { "Authorization": `Bearer ${bearerToken}` },
         signal
@@ -2899,6 +2902,24 @@ export async function startTwitterFilteredStream() {
 
       const tweet = payload.data;
       if (!tweet) return;
+
+      // Dump full raw payload so we can inspect media fields in logs
+      console.log(`[POLLER] Raw stream payload:`, JSON.stringify(payload));
+
+      // Extract media attachments from the expanded includes
+      const mediaKeys: string[] = tweet.attachments?.media_keys || [];
+      const includes = payload.includes || {};
+      const mediaItems: any[] = includes.media || [];
+      const attachedMedia = mediaItems.filter((m: any) => mediaKeys.includes(m.media_key));
+
+      if (mediaKeys.length > 0) {
+        console.log(`[POLLER] Tweet ${tweet.id} has ${mediaKeys.length} media attachment(s):`);
+        attachedMedia.forEach((m: any, i: number) => {
+          console.log(`[POLLER]   [${i + 1}] type=${m.type} key=${m.media_key} url=${m.url || m.preview_image_url || '(no url)'}`);
+        });
+      } else {
+        console.log(`[POLLER] Tweet ${tweet.id} has no media attachments.`);
+      }
 
       console.log(`[POLLER] Received stream tweet event: ${tweet.id} - "${tweet.text}" (author: ${tweet.author_id})`);
 
