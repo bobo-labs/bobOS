@@ -3543,8 +3543,13 @@ app.post("/api/onboard/wallet-submit", async (req, res) => {
     }
 
     if (result.error) {
-      console.error("[ONBOARD-WALLET] Link submit error:", result.error);
-      return res.status(500).json({ error: "CC wallet link error", details: result.error });
+      const errMsg = (result.error as any).message || String(result.error);
+      if (errMsg.includes("Wallet already linked")) {
+        console.warn("[ONBOARD-WALLET] Wallet already linked on CC side. Proceeding to save locally.");
+      } else {
+        console.error("[ONBOARD-WALLET] Link submit error:", result.error);
+        return res.status(500).json({ error: "CC wallet link error", details: result.error });
+      }
     }
 
     // Persist wallet address to our local cc_linked_accounts record
