@@ -3530,8 +3530,60 @@ app.get("/onboard/link-wallet", (req, res) => {
         badge.className = 'badge ok'; badge.innerText = '✓ Wallet Linked!';
         btnSign.style.display = 'none'; s3.classList.remove('active');
         log('Wallet successfully linked to your Coin Communities account!', 's');
+
+        // Start Step 4
+        s4.classList.add('active');
+        document.getElementById('tokens-loading').style.display = 'block';
+        log('Scanning wallet for tokens...', 'i');
+        fetch('/api/onboard/wallet-tokens?walletAddress=' + walletAddress)
+          .then(r => r.json())
+          .then(data => {
+            document.getElementById('tokens-loading').style.display = 'none';
+            const list = document.getElementById('tokens-list');
+            list.style.display = 'block';
+            document.getElementById('tokens-actions').style.display = 'flex';
+            document.getElementById('btn-save-communities').style.display = 'block';
+            if (!data.tokens || data.tokens.length === 0) {
+              list.innerHTML = '<div style="color:var(--muted); text-align:center; padding:1rem;">No tokens > $8 found. Default $BOBO access applied.</div>';
+            } else {
+              list.innerHTML = data.tokens.map(t => 
+                '<label style="display:flex; align-items:center; gap:0.5rem; padding:0.5rem; border-bottom:1px solid rgba(255,255,255,0.05); cursor:pointer;">' +
+                '<input type="checkbox" class="token-cb" value="' + t.mint + '" checked> ' +
+                '<span style="font-family:monospace; font-size:0.8rem;">' + t.mint.substring(0,8) + '...</span> ' +
+                '<span style="color:#10B981; font-weight:600;">$' + t.valueUsd.toFixed(2) + '</span>' +
+                '</label>'
+              ).join('');
+            }
+            log('Tokens found: ' + (data.tokens ? data.tokens.length : 0), 's');
+          })
+          .catch(e => {
+            document.getElementById('tokens-loading').innerText = 'Failed to load tokens: ' + e.message;
+          });
       } catch (e) { btnSign.disabled = false; log('Error: ' + e.message, 'e'); }
     });
+
+    document.getElementById('btn-save-communities').addEventListener('click', async () => {
+      const btn = document.getElementById('btn-save-communities');
+      btn.disabled = true; btn.innerText = 'Saving...';
+      const checkboxes = document.querySelectorAll('.token-cb:checked');
+      const selected = Array.from(checkboxes).map(cb => cb.value);
+      try {
+        log('Saving selected communities...', 'i');
+        const r = await fetch('/api/onboard/save-communities', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ twitter_id: TWITTER_ID, communities: selected })
+        });
+        if (!r.ok) throw new Error('Failed to save');
+        btn.style.display = 'none';
+        document.getElementById('tokens-actions').style.display = 'none';
+        document.getElementById('final-finish').style.display = 'block';
+        s4.classList.remove('active');
+        log('Communities saved. Onboarding complete!', 's');
+      } catch (e) { log('Error: ' + e.message, 'e'); btn.disabled = false; btn.innerText = 'Save Selection & Finish'; }
+    });
+
+    window.selectAll = function() { document.querySelectorAll('.token-cb').forEach(cb => cb.checked = true); }
+    window.deselectAll = function() { document.querySelectorAll('.token-cb').forEach(cb => cb.checked = false); }
   </script>
 </body>
 </html>`);
