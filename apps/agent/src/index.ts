@@ -3546,13 +3546,18 @@ app.get("/onboard/link-wallet", (req, res) => {
             if (!data.tokens || data.tokens.length === 0) {
               list.innerHTML = '<div style="color:var(--muted); text-align:center; padding:1rem;">No tokens > $8 found. Default $BOBO access applied.</div>';
             } else {
-              list.innerHTML = data.tokens.map(t => 
-                '<label style="display:flex; align-items:center; gap:0.5rem; padding:0.5rem; border-bottom:1px solid rgba(255,255,255,0.05); cursor:pointer;">' +
-                '<input type="checkbox" class="token-cb" value="' + t.mint + '" checked> ' +
-                '<span style="font-family:monospace; font-size:0.8rem;">' + t.mint.substring(0,8) + '...</span> ' +
-                '<span style="color:#10B981; font-weight:600;">$' + t.valueUsd.toFixed(2) + '</span>' +
-                '</label>'
-              ).join('');
+              list.innerHTML = data.tokens.map(t => {
+                const label = (t.symbol || t.name || t.mint.substring(0,8) + '...');
+                const shortMint = t.mint.substring(0,6) + '...' + t.mint.slice(-4);
+                return '<label style="display:flex; align-items:center; gap:0.75rem; padding:0.6rem 0.5rem; border-bottom:1px solid rgba(255,255,255,0.05); cursor:pointer;">' +
+                  '<input type="checkbox" class="token-cb" value="' + t.mint + '" checked style="width:16px;height:16px;flex-shrink:0;"> ' +
+                  '<span style="flex:1; min-width:0;">' +
+                    '<span style="font-weight:700; color:#fff;">' + label + '</span> ' +
+                    '<span style="font-family:monospace; font-size:0.75rem; color:var(--muted);">(' + shortMint + ')</span>' +
+                  '</span>' +
+                  '<span style="color:#10B981; font-weight:700; white-space:nowrap;">$' + t.valueUsd.toFixed(2) + '</span>' +
+                  '</label>';
+              }).join('');
             }
             log('Tokens found: ' + (data.tokens ? data.tokens.length : 0), 's');
           })
@@ -3669,56 +3674,62 @@ app.get("/api/onboard/wallet-tokens", async (req, res) => {
     const walletAddress = req.query.walletAddress as string;
     if (!walletAddress) return res.status(400).json({ error: "Missing walletAddress" });
 
-    // 1. Fetch token accounts from Helius RPC
-    const rpcUrl = process.env.HELIUS_RPC_URL || `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
-    const rpcRes = await fetch(rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0", id: 1,
-        method: "getTokenAccountsByOwner",
-        params: [walletAddress, { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }, { encoding: "jsonParsed" }]
+    const heliusKey = process.env.HELIUS_API_KEY || "";
+    const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`;
+
+    // Use Helius DAS getAssetsByOwner — returns balance + price in ONE call (supports all token programs)
+    const allTokens: any[] = [];
+    let page = 1;
+    const limit = 100;
+
+    while (true) {
+      const rpcRes = await fetch(rpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 1,
+          method: "getAssetsByOwner",
+          params: {
+            ownerAddress: walletAddress,
+            page,
+            limit,
+            displayOptions: { showFungible: true, showNativeBalance: false }
+          }
+        })
+      });
+
+      if (!rpcRes.ok) throw new Error(`Helius DAS error: HTTP ${rpcRes.status}`);
+      const data = await rpcRes.json();
+      if (data.error) throw new Error(`Helius DAS RPC error: ${data.error.message}`);
+
+      const items = data.result?.items || [];
+      const fungible = items.filter((item: any) => item.interface === "FungibleToken");
+      allTokens.push(...fungible);
+
+      // If fewer results than limit, we've reached the last page
+      if (items.length < limit) break;
+      page++;
+    }
+
+    console.log(`[ONBOARD-TOKENS] Found ${allTokens.length} fungible tokens for ${walletAddress}`);
+
+    // Filter for > $8 USD value
+    const eligibleTokens = allTokens
+      .map((item: any) => {
+        const info = item.token_info || {};
+        const rawBalance = info.balance || 0;
+        const decimals = info.decimals ?? 0;
+        const uiBalance = rawBalance / Math.pow(10, decimals);
+        const pricePerToken = info.price_info?.price_per_token || 0;
+        const valueUsd = uiBalance * pricePerToken;
+        const symbol = info.symbol || item.content?.metadata?.symbol || "";
+        const name = item.content?.metadata?.name || symbol;
+        return { mint: item.id, balance: uiBalance, price: pricePerToken, valueUsd, symbol, name };
       })
-    });
-    
-    if (!rpcRes.ok) throw new Error("Failed to fetch from Helius");
-    const data = await rpcRes.json();
-    if (!data.result || !data.result.value) return res.json({ tokens: [] });
-
-    // Extract non-zero balance mints
-    const tokenAccounts = data.result.value
-      .map((acc: any) => ({
-        mint: acc.account.data.parsed.info.mint,
-        amount: acc.account.data.parsed.info.tokenAmount.uiAmount
-      }))
-      .filter((acc: any) => acc.amount > 0);
-
-    if (tokenAccounts.length === 0) return res.json({ tokens: [] });
-
-    // 2. Fetch prices from Jupiter
-    const mints = tokenAccounts.map((t: any) => t.mint);
-    // Chunking to 100 max for Jup API
-    const chunkedMints = mints.slice(0, 100);
-    const jupRes = await fetch(`https://price.jup.ag/v6/price?ids=${chunkedMints.join(",")}`);
-    const jupData = await jupRes.json();
-    const prices = jupData.data || {};
-
-    // 3. Filter for > $8 value
-    const eligibleTokens = tokenAccounts
-      .filter((t: any) => {
-        const priceInfo = prices[t.mint];
-        if (!priceInfo) return false;
-        const valueUsd = t.amount * priceInfo.price;
-        return valueUsd > 8.0;
-      })
-      .map((t: any) => ({
-        mint: t.mint,
-        balance: t.amount,
-        price: prices[t.mint].price,
-        valueUsd: t.amount * prices[t.mint].price
-      }))
+      .filter((t: any) => t.valueUsd > 8.0)
       .sort((a: any, b: any) => b.valueUsd - a.valueUsd);
 
+    console.log(`[ONBOARD-TOKENS] Eligible (>$8): ${eligibleTokens.length}`);
     res.json({ tokens: eligibleTokens });
   } catch (err: any) {
     console.error("[ONBOARD-TOKENS] Error:", err.message);
