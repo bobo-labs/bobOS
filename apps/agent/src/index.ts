@@ -2572,13 +2572,7 @@ async function forwardTweetInternally(params: { tweetId: string; tweetText: stri
 
     // Strip X's auto-appended t.co short-links (added when media is attached)
     const cleanText = params.tweetText.replace(/https:\/\/t\.co\/\S+/g, "").trim();
-
-    // Build content: clean text + real image URLs on new lines
-    let formattedContent = cleanText;
-    if (params.mediaUrls && params.mediaUrls.length > 0) {
-      formattedContent = cleanText + (cleanText ? "\n" : "") + params.mediaUrls.join("\n");
-      console.log(`[POLLER] Embedding ${params.mediaUrls.length} image(s) into post content.`);
-    }
+    const formattedContent = cleanText;
 
     // Get a fresh, valid CC token for this specific Twitter user
     const accessToken = await getValidCCToken(params.twitterId);
@@ -2591,6 +2585,41 @@ async function forwardTweetInternally(params: { tweetId: string; tweetText: stri
       baseUrl: "https://api.coin-communities.xyz",
       headers: { "x-api-key": process.env.CC_API_KEY || "", "Authorization": `Bearer ${accessToken}` }
     });
+
+    // Upload first media attachment to CC (CC only accepts URLs from their own upload endpoint)
+    let ccMediaUrl: string | undefined;
+    if (params.mediaUrls && params.mediaUrls.length > 0) {
+      const imageUrl = params.mediaUrls[0];
+      try {
+        console.log(`[POLLER] Downloading image for CC upload: ${imageUrl}`);
+        const imgRes = await fetch(imageUrl);
+        if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status}`);
+
+        // Determine content type from URL extension or response header
+        const contentTypeHeader = imgRes.headers.get("content-type") || "";
+        let contentType = "image/jpeg";
+        if (imageUrl.endsWith(".png") || contentTypeHeader.includes("png")) contentType = "image/png";
+        else if (imageUrl.endsWith(".gif") || contentTypeHeader.includes("gif")) contentType = "image/gif";
+        else if (imageUrl.endsWith(".webp") || contentTypeHeader.includes("webp")) contentType = "image/webp";
+
+        const imageBytes = await imgRes.arrayBuffer();
+        const base64Data = Buffer.from(imageBytes).toString("base64");
+
+        console.log(`[POLLER] Uploading image to CC (${contentType}, ${Math.round(base64Data.length / 1024)}KB base64)...`);
+        const uploadRes = await api.uploadCommunityMedia({
+          body: { contentType, data: base64Data } as any,
+        });
+
+        if (uploadRes.error) {
+          console.error(`[POLLER] CC media upload failed:`, uploadRes.error);
+        } else {
+          ccMediaUrl = (uploadRes.data as any)?.mediaUrl;
+          console.log(`[POLLER] CC media upload success: ${ccMediaUrl}`);
+        }
+      } catch (err: any) {
+        console.error(`[POLLER] Failed to fetch/upload image ${imageUrl}:`, err.message);
+      }
+    }
 
     // Fetch the wallet linked to this CC account
     let finalWalletAddress = process.env.AGENT_WALLET_ADDRESS || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
@@ -2607,7 +2636,7 @@ async function forwardTweetInternally(params: { tweetId: string; tweetText: stri
 
     const response = await api.postMessage({
       path: { token_address: tokenAddress },
-      body: { content: formattedContent, chainId: "solana", walletAddress: finalWalletAddress },
+      body: { content: formattedContent, chainId: "solana", walletAddress: finalWalletAddress, ...(ccMediaUrl ? { mediaUrl: ccMediaUrl } : {}) } as any,
     });
 
     // Restore server key credentials
