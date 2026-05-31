@@ -2983,6 +2983,68 @@ app.post("/admin/generate-invite", async (req, res) => {
   }
 });
 
+/** GET /admin/generate-invite — same as POST but callable directly from a browser */
+app.get("/admin/generate-invite", async (req, res) => {
+  const adminSecret = process.env.ADMIN_SECRET;
+  const provided = req.query.secret as string | undefined;
+  if (!adminSecret || provided !== adminSecret) {
+    res.setHeader("Content-Type", "text/html");
+    return res.status(403).send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Forbidden</title><style>body{font-family:sans-serif;background:#0B0D17;color:#EF4444;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}h1{font-size:1.5rem}</style></head><body><h1>🔒 Wrong or missing secret</h1></body></html>`);
+  }
+  const note = (req.query.note as string) || null;
+  const code = "bobo-" + crypto.randomBytes(8).toString("hex");
+  try {
+    await db.insert(inviteCodes).values({ code, note });
+    const baseUrl = process.env.AGENT_PUBLIC_URL || "https://agent-production-6e6f.up.railway.app";
+    const link = `${baseUrl}/onboard?code=${code}`;
+    console.log(`[ADMIN] Generated invite code: ${code} (${note || "no label"})`);
+    // Render a nice page with the copyable link
+    res.setHeader("Content-Type", "text/html");
+    return res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Invite Generated</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&family=Space+Mono&display=swap" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Outfit',sans-serif;background:#0B0D17;color:#F3F4F6;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem}
+    .card{max-width:560px;width:100%;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:24px;padding:2.5rem;box-shadow:0 20px 40px rgba(0,0,0,.5);animation:up .6s ease-out}
+    @keyframes up{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+    .icon{font-size:2.5rem;text-align:center;margin-bottom:.75rem}
+    h1{font-size:1.5rem;font-weight:800;text-align:center;background:linear-gradient(135deg,#fff 30%,#10B981);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:1.5rem}
+    .label{font-size:.75rem;font-weight:600;color:#9CA3AF;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem}
+    .mono{font-family:'Space Mono',monospace;font-size:.8rem;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.07);border-radius:10px;padding:.75rem 1rem;word-break:break-all;color:#22D3EE;margin-bottom:1.25rem}
+    .link-box{display:flex;gap:.5rem;margin-bottom:1.5rem}
+    .link-input{flex:1;font-family:'Space Mono',monospace;font-size:.78rem;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.07);border-radius:10px;padding:.75rem 1rem;color:#22D3EE;outline:none;word-break:break-all}
+    .btn-copy{background:#9333EA;color:#fff;border:none;border-radius:10px;padding:.75rem 1.1rem;font-family:inherit;font-size:.875rem;font-weight:600;cursor:pointer;white-space:nowrap;transition:background .2s}
+    .btn-copy:hover{background:#A855F7}
+    .note-badge{display:inline-block;background:rgba(16,185,129,.1);color:#10B981;border-radius:9999px;padding:.2rem .7rem;font-size:.75rem;font-weight:600}
+    .warn{font-size:.8rem;color:#9CA3AF;text-align:center}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">✅</div>
+    <h1>Invite Link Generated</h1>
+    ${note ? `<div style="text-align:center;margin-bottom:1.25rem"><span class="note-badge">For: ${note}</span></div>` : ""}
+    <div class="label">Invite Code</div>
+    <div class="mono">${code}</div>
+    <div class="label">Onboard Link (send this to the user)</div>
+    <div class="link-box">
+      <input class="link-input" id="link-val" value="${link}" readonly onclick="this.select()">
+      <button class="btn-copy" onclick="navigator.clipboard.writeText(document.getElementById('link-val').value);this.innerText='Copied!'">Copy</button>
+    </div>
+    <p class="warn">⚠️ Single-use only — this link will stop working after the user completes onboarding.</p>
+  </div>
+</body>
+</html>`);
+  } catch (err: any) {
+    console.error("[ADMIN] Failed to insert invite code:", err);
+    return res.status(500).send("Error: " + err.message);
+  }
+});
+
 app.get("/onboard", async (req, res) => {
   const baseUrl = process.env.AGENT_PUBLIC_URL || "https://agent-production-6e6f.up.railway.app";
   const code = req.query.code as string | undefined;
