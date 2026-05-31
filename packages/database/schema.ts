@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, boolean, doublePrecision, timestamp, integer, text, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, boolean, doublePrecision, timestamp, integer, text, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
 
 // CC token store — one row per Twitter user who has authorized their CC account.
 // The agent uses these tokens to post on their behalf and auto-refreshes before expiry.
@@ -10,6 +10,7 @@ export const ccLinkedAccounts = pgTable("cc_linked_accounts", {
   refresh_token: text("refresh_token").notNull(),
   expires_at: timestamp("expires_at").notNull(),
   wallet_address: varchar("wallet_address", { length: 100 }),
+  target_communities: jsonb("target_communities"),
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({

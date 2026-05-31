@@ -2568,9 +2568,17 @@ async function seedCCAccountFromEnv() {
 
 async function forwardTweetInternally(params: { tweetId: string; tweetText: string; twitterId: string; mediaUrls?: string[] }): Promise<boolean> {
   try {
-    const tokenAddress = process.env.CC_TOKEN_ADDRESS || process.env.AGENT_TOKEN_MINT || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
+    // 1. Fetch the user's account to get their wallet and target communities
+    const [account] = await db.select().from(ccLinkedAccounts).where(eq(ccLinkedAccounts.twitter_id as any, params.twitterId as any) as any);
+    
+    const defaultToken = process.env.CC_TOKEN_ADDRESS || process.env.AGENT_TOKEN_MINT || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
+    const targetCommunities = account?.target_communities as string[] | undefined;
+    const communitiesToPost = targetCommunities && targetCommunities.length > 0 ? targetCommunities : [defaultToken];
+    
+    // Fetch the wallet linked to this CC account (fallback to AGENT_WALLET_ADDRESS)
+    let finalWalletAddress = account?.wallet_address || process.env.AGENT_WALLET_ADDRESS || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
 
-    // Strip X's auto-appended t.co short-links (added when media is attached)
+    // Strip X's auto-appended t.co short-links
     const cleanText = params.tweetText.replace(/https:\/\/t\.co\/\S+/g, "").trim();
     const formattedContent = cleanText;
 
@@ -2586,7 +2594,7 @@ async function forwardTweetInternally(params: { tweetId: string; tweetText: stri
       headers: { "x-api-key": process.env.CC_API_KEY || "", "Authorization": `Bearer ${accessToken}` }
     });
 
-    // Upload first media attachment to CC (CC only accepts URLs from their own upload endpoint)
+    // Upload first media attachment to CC
     let ccMediaUrl: string | undefined;
     if (params.mediaUrls && params.mediaUrls.length > 0) {
       const imageUrl = params.mediaUrls[0];
@@ -2595,7 +2603,6 @@ async function forwardTweetInternally(params: { tweetId: string; tweetText: stri
         const imgRes = await fetch(imageUrl);
         if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status}`);
 
-        // Determine content type from URL extension or response header
         const contentTypeHeader = imgRes.headers.get("content-type") || "";
         let contentType = "image/jpeg";
         if (imageUrl.endsWith(".png") || contentTypeHeader.includes("png")) contentType = "image/png";
@@ -2621,34 +2628,55 @@ async function forwardTweetInternally(params: { tweetId: string; tweetText: stri
       }
     }
 
-    // Fetch the wallet linked to this CC account
-    let finalWalletAddress = process.env.AGENT_WALLET_ADDRESS || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
-    try {
-      const walletsRes = await api.getWallets({});
-      const wallets = walletsRes.data?.wallets || [];
-      if (wallets.length > 0) {
-        finalWalletAddress = wallets[0].address;
-        console.log(`[POLLER] Using linked wallet: ${finalWalletAddress}`);
+    // Try API if wallet is still default
+    if (finalWalletAddress === process.env.AGENT_WALLET_ADDRESS || finalWalletAddress === "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump") {
+      try {
+        const walletsRes = await api.getWallets({});
+        const wallets = walletsRes.data?.wallets || [];
+        if (wallets.length > 0) {
+          finalWalletAddress = wallets[0].address;
+          console.log(`[POLLER] Using linked wallet from API: ${finalWalletAddress}`);
+        }
+      } catch (err) {
+        console.error("[POLLER] Failed to fetch wallets, using fallback:", err);
       }
-    } catch (err) {
-      console.error("[POLLER] Failed to fetch wallets, using fallback:", err);
+    } else {
+      console.log(`[POLLER] Using linked wallet from DB: ${finalWalletAddress}`);
     }
 
-    const response = await api.postMessage({
-      path: { token_address: tokenAddress },
-      body: { content: formattedContent, chainId: "solana", walletAddress: finalWalletAddress, ...(ccMediaUrl ? { mediaUrl: ccMediaUrl } : {}) } as any,
-    });
+    // Loop over all target communities and post
+    let successCount = 0;
+    console.log(`[POLLER] Forwarding tweet to ${communitiesToPost.length} communities...`);
+    
+    for (const tokenAddr of communitiesToPost) {
+      const response = await api.postMessage({
+        path: { token_address: tokenAddr },
+        body: { content: formattedContent, chainId: "solana", walletAddress: finalWalletAddress, ...(ccMediaUrl ? { mediaUrl: ccMediaUrl } : {}) } as any,
+      });
+
+      if (response.error) {
+        console.error(`[POLLER] Post failed for community ${tokenAddr}:`, response.error);
+      } else {
+        successCount++;
+      }
+      
+      // Minor delay to avoid rate limiting if multiple communities
+      if (communitiesToPost.length > 1) {
+        await new Promise(r => setTimeout(r, 500));
+      }
+    }
 
     // Restore server key credentials
     if (ccServerKey && ccServerSecret) {
       configureApi({ baseUrl: "https://api.coin-communities.xyz", headers: { "x-server-key": ccServerKey, "x-server-secret": ccServerSecret } });
     }
 
-    if (response.error) {
-      console.error("[POLLER] Post failed:", response.error);
+    if (successCount === 0) {
+      console.error("[POLLER] Failed to forward tweet to any community.");
       return false;
     }
-    console.log(`[POLLER] Tweet ${params.tweetId} forwarded successfully!`);
+    
+    console.log(`[POLLER] Tweet ${params.tweetId} forwarded successfully to ${successCount} communities!`);
     return true;
   } catch (error) {
     console.error("[POLLER] Internal error forwarding tweet:", error);
@@ -3400,6 +3428,19 @@ app.get("/onboard/link-wallet", (req, res) => {
       <div id="final-status" style="display:none"><div class="badge" id="final-badge"></div></div>
     </div>
 
+    <div class="step" id="s4">
+      <div class="step-head"><div class="step-num">4</div><div class="step-title">Select Communities</div></div>
+      <div class="step-desc">Select which communities you want to automatically forward your tweets to (must hold >$8).</div>
+      <div id="tokens-loading" style="display:none; color:var(--muted); font-size:0.9rem; margin-bottom:1rem;">Scanning wallet...</div>
+      <div id="tokens-list" style="max-height: 200px; overflow-y: auto; margin-bottom: 1rem; border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem; display:none;"></div>
+      <div style="display:none; justify-content:space-between; margin-bottom: 1rem;" id="tokens-actions">
+        <button class="btn" style="background:transparent; border:1px solid var(--border); padding:0.4rem 0.8rem; font-size:0.8rem; cursor:pointer;" onclick="window.selectAll()">Select All</button>
+        <button class="btn" style="background:transparent; border:1px solid var(--border); padding:0.4rem 0.8rem; font-size:0.8rem; cursor:pointer;" onclick="window.deselectAll()">Deselect All</button>
+      </div>
+      <button class="btn btn-primary" id="btn-save-communities" style="display:none;">Save Selection &amp; Finish</button>
+      <div id="final-finish" style="display:none; margin-top:1rem;"><div class="badge ok">✓ All done! You can close this page.</div></div>
+    </div>
+
     <div class="log-box">
       <div class="log-label">Activity Log</div>
       <div class="log" id="log"><span class="i">[System] Ready. Please connect your wallet.</span></div>
@@ -3409,7 +3450,7 @@ app.get("/onboard/link-wallet", (req, res) => {
   <script>
     const TWITTER_ID = '${twitterId}';
     let walletAddress = null, challenge = null;
-    const s1 = document.getElementById('s1'), s2 = document.getElementById('s2'), s3 = document.getElementById('s3');
+    const s1 = document.getElementById('s1'), s2 = document.getElementById('s2'), s3 = document.getElementById('s3'), s4 = document.getElementById('s4');
     const btnConnect = document.getElementById('btn-connect');
     const btnChallenge = document.getElementById('btn-challenge');
     const btnSign = document.getElementById('btn-sign');
@@ -3568,6 +3609,91 @@ app.post("/api/onboard/wallet-submit", async (req, res) => {
   }
 });
 
+// ─── Wallet Communities & Tokens ──────────────────────────────────────────────
+
+/** GET /api/onboard/wallet-tokens?walletAddress=... */
+app.get("/api/onboard/wallet-tokens", async (req, res) => {
+  try {
+    const walletAddress = req.query.walletAddress as string;
+    if (!walletAddress) return res.status(400).json({ error: "Missing walletAddress" });
+
+    // 1. Fetch token accounts from Helius RPC
+    const rpcUrl = process.env.HELIUS_RPC_URL || `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
+    const rpcRes = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1,
+        method: "getTokenAccountsByOwner",
+        params: [walletAddress, { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }, { encoding: "jsonParsed" }]
+      })
+    });
+    
+    if (!rpcRes.ok) throw new Error("Failed to fetch from Helius");
+    const data = await rpcRes.json();
+    if (!data.result || !data.result.value) return res.json({ tokens: [] });
+
+    // Extract non-zero balance mints
+    const tokenAccounts = data.result.value
+      .map((acc: any) => ({
+        mint: acc.account.data.parsed.info.mint,
+        amount: acc.account.data.parsed.info.tokenAmount.uiAmount
+      }))
+      .filter((acc: any) => acc.amount > 0);
+
+    if (tokenAccounts.length === 0) return res.json({ tokens: [] });
+
+    // 2. Fetch prices from Jupiter
+    const mints = tokenAccounts.map((t: any) => t.mint);
+    // Chunking to 100 max for Jup API
+    const chunkedMints = mints.slice(0, 100);
+    const jupRes = await fetch(`https://price.jup.ag/v6/price?ids=${chunkedMints.join(",")}`);
+    const jupData = await jupRes.json();
+    const prices = jupData.data || {};
+
+    // 3. Filter for > $8 value
+    const eligibleTokens = tokenAccounts
+      .filter((t: any) => {
+        const priceInfo = prices[t.mint];
+        if (!priceInfo) return false;
+        const valueUsd = t.amount * priceInfo.price;
+        return valueUsd > 8.0;
+      })
+      .map((t: any) => ({
+        mint: t.mint,
+        balance: t.amount,
+        price: prices[t.mint].price,
+        valueUsd: t.amount * prices[t.mint].price
+      }))
+      .sort((a: any, b: any) => b.valueUsd - a.valueUsd);
+
+    res.json({ tokens: eligibleTokens });
+  } catch (err: any) {
+    console.error("[ONBOARD-TOKENS] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** POST /api/onboard/save-communities */
+app.post("/api/onboard/save-communities", async (req, res) => {
+  try {
+    const { twitter_id, communities } = req.body;
+    if (!twitter_id || !Array.isArray(communities)) return res.status(400).json({ error: "Invalid payload" });
+
+    const [account] = await db.select().from(ccLinkedAccounts).where(eq(ccLinkedAccounts.twitter_id as any, twitter_id as any) as any);
+    if (!account) return res.status(404).json({ error: "Account not found" });
+
+    await db.update(ccLinkedAccounts)
+      .set({ target_communities: communities, updated_at: new Date() })
+      .where(eq(ccLinkedAccounts.twitter_id as any, twitter_id as any) as any);
+
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error("[ONBOARD-COMMUNITIES] Save error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.SERVER_PORT || "3001");
 app.listen(PORT, async () => {
@@ -3589,9 +3715,11 @@ app.listen(PORT, async () => {
         refresh_token TEXT NOT NULL,
         expires_at TIMESTAMP NOT NULL,
         wallet_address VARCHAR(100),
+        target_communities JSONB,
         created_at TIMESTAMP NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMP NOT NULL DEFAULT NOW()
       );
+      ALTER TABLE cc_linked_accounts ADD COLUMN IF NOT EXISTS target_communities JSONB;
       CREATE UNIQUE INDEX IF NOT EXISTS cc_linked_accounts_twitter_id_idx ON cc_linked_accounts (twitter_id);
     `);
     console.log("[DB] cc_linked_accounts table ready.");
