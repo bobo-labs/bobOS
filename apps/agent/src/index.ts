@@ -962,8 +962,8 @@ app.post("/api/forward-tweet", async (req, res) => {
     console.log(`[FORWARDER] Received request body:`, JSON.stringify(req.body));
     console.log(`[FORWARDER] Forwarding tweet ${parsedTweetId} on behalf of Twitter ID ${twitterId} to room ${tokenAddress}`);
 
-    // Format content with original tweet link
-    const formattedContent = `${tweetText}\n\n🔗 Original tweet: https://x.com/i/web/status/${parsedTweetId}`;
+    // Post tweet content as-is — no extra link or metadata appended
+    const formattedContent = tweetText;
 
     // Determine whether to use client-side api.postMessage (via USER_ACCESS_TOKEN) or server-side api.postMessageServer
     const userAccessToken = process.env.USER_ACCESS_TOKEN;
@@ -2569,7 +2569,8 @@ async function seedCCAccountFromEnv() {
 async function forwardTweetInternally(params: { tweetId: string; tweetText: string; twitterId: string }): Promise<boolean> {
   try {
     const tokenAddress = process.env.CC_TOKEN_ADDRESS || process.env.AGENT_TOKEN_MINT || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
-    const formattedContent = `${params.tweetText}\n\n🔗 Original tweet: https://x.com/i/web/status/${params.tweetId}`;
+    // Post tweet content as-is — no extra link or metadata appended
+    const formattedContent = params.tweetText;
 
     // Get a fresh, valid CC token for this specific Twitter user
     const accessToken = await getValidCCToken(params.twitterId);
