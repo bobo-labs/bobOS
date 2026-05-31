@@ -2566,11 +2566,19 @@ async function seedCCAccountFromEnv() {
   console.log(`[CC_TOKENS] Seeded account from env for Twitter ID ${twitterId}`);
 }
 
-async function forwardTweetInternally(params: { tweetId: string; tweetText: string; twitterId: string }): Promise<boolean> {
+async function forwardTweetInternally(params: { tweetId: string; tweetText: string; twitterId: string; mediaUrls?: string[] }): Promise<boolean> {
   try {
     const tokenAddress = process.env.CC_TOKEN_ADDRESS || process.env.AGENT_TOKEN_MINT || "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump";
-    // Post tweet content as-is — no extra link or metadata appended
-    const formattedContent = params.tweetText;
+
+    // Strip X's auto-appended t.co short-links (added when media is attached)
+    const cleanText = params.tweetText.replace(/https:\/\/t\.co\/\S+/g, "").trim();
+
+    // Build content: clean text + real image URLs on new lines
+    let formattedContent = cleanText;
+    if (params.mediaUrls && params.mediaUrls.length > 0) {
+      formattedContent = cleanText + (cleanText ? "\n" : "") + params.mediaUrls.join("\n");
+      console.log(`[POLLER] Embedding ${params.mediaUrls.length} image(s) into post content.`);
+    }
 
     // Get a fresh, valid CC token for this specific Twitter user
     const accessToken = await getValidCCToken(params.twitterId);
@@ -2948,11 +2956,17 @@ export async function startTwitterFilteredStream() {
 
       const authorId = tweet.author_id || userIds[0];
 
+      // Collect real media URLs from the stream's expanded includes
+      const mediaUrls: string[] = attachedMedia
+        .map((m: any) => m.url || m.preview_image_url)
+        .filter(Boolean);
+
       // Forward to Coin Communities
       forwardTweetInternally({
         tweetId: tweet.id,
         tweetText: tweet.text || "",
         twitterId: authorId,
+        mediaUrls,
       }).then(success => {
         if (success) {
           console.log(`[POLLER] Successfully forwarded tweet ${tweet.id} from stream.`);
