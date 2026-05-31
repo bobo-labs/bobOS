@@ -3677,7 +3677,7 @@ app.get("/api/onboard/wallet-tokens", async (req, res) => {
     const heliusKey = process.env.HELIUS_API_KEY || "";
     const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`;
 
-    // Use Helius DAS getAssetsByOwner — returns balance + price in ONE call (supports all token programs)
+    // Step 1: Helius DAS getAssetsByOwner — returns balances + prices for most tokens
     const allTokens: any[] = [];
     let page = 1;
     const limit = 100;
@@ -3706,26 +3706,70 @@ app.get("/api/onboard/wallet-tokens", async (req, res) => {
       const fungible = items.filter((item: any) => item.interface === "FungibleToken");
       allTokens.push(...fungible);
 
-      // If fewer results than limit, we've reached the last page
       if (items.length < limit) break;
       page++;
     }
 
     console.log(`[ONBOARD-TOKENS] Found ${allTokens.length} fungible tokens for ${walletAddress}`);
 
-    // Filter for > $8 USD value
-    const eligibleTokens = allTokens
-      .map((item: any) => {
-        const info = item.token_info || {};
-        const rawBalance = info.balance || 0;
-        const decimals = info.decimals ?? 0;
-        const uiBalance = rawBalance / Math.pow(10, decimals);
-        const pricePerToken = info.price_info?.price_per_token || 0;
-        const valueUsd = uiBalance * pricePerToken;
-        const symbol = info.symbol || item.content?.metadata?.symbol || "";
-        const name = item.content?.metadata?.name || symbol;
-        return { mint: item.id, balance: uiBalance, price: pricePerToken, valueUsd, symbol, name };
-      })
+    // Step 2: Build initial token list from Helius data
+    const tokenList = allTokens.map((item: any) => {
+      const info = item.token_info || {};
+      const rawBalance = info.balance || 0;
+      const decimals = info.decimals ?? 0;
+      const uiBalance = rawBalance / Math.pow(10, decimals);
+      const pricePerToken = info.price_info?.price_per_token || 0;
+      const symbol = info.symbol || item.content?.metadata?.symbol || "";
+      const name = item.content?.metadata?.name || symbol;
+      return { mint: item.id, balance: uiBalance, price: pricePerToken, valueUsd: uiBalance * pricePerToken, symbol, name };
+    }).filter((t: any) => t.balance > 0);
+
+    // Step 3: For tokens with no price from Helius, fall back to DexScreener (handles pump.fun tokens)
+    const missingPrice = tokenList.filter((t: any) => t.price === 0).map((t: any) => t.mint);
+    if (missingPrice.length > 0) {
+      console.log(`[ONBOARD-TOKENS] Fetching DexScreener prices for ${missingPrice.length} tokens missing prices...`);
+
+      // DexScreener supports up to 30 tokens per request
+      const CHUNK = 30;
+      const dexPrices: Record<string, number> = {};
+
+      for (let i = 0; i < missingPrice.length; i += CHUNK) {
+        const chunk = missingPrice.slice(i, i + CHUNK);
+        try {
+          const dexRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(",")}`);
+          if (dexRes.ok) {
+            const dexData = await dexRes.json();
+            const pairs: any[] = dexData.pairs || [];
+            // Group by base token address, pick pair with highest liquidity
+            const byMint: Record<string, any[]> = {};
+            for (const pair of pairs) {
+              const addr = pair.baseToken?.address;
+              if (!addr) continue;
+              if (!byMint[addr]) byMint[addr] = [];
+              byMint[addr].push(pair);
+            }
+            for (const [addr, pairList] of Object.entries(byMint)) {
+              const best = pairList.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+              const price = parseFloat(best.priceUsd || "0");
+              if (price > 0) dexPrices[addr] = price;
+            }
+          }
+        } catch (e: any) {
+          console.warn(`[ONBOARD-TOKENS] DexScreener chunk failed: ${e.message}`);
+        }
+      }
+
+      // Merge DexScreener prices back into tokenList
+      for (const token of tokenList) {
+        if (token.price === 0 && dexPrices[token.mint]) {
+          token.price = dexPrices[token.mint];
+          token.valueUsd = token.balance * token.price;
+        }
+      }
+    }
+
+    // Step 4: Filter for > $8 USD value and sort
+    const eligibleTokens = tokenList
       .filter((t: any) => t.valueUsd > 8.0)
       .sort((a: any, b: any) => b.valueUsd - a.valueUsd);
 
