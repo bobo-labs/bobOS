@@ -3724,45 +3724,39 @@ app.get("/api/onboard/wallet-tokens", async (req, res) => {
       return { mint: item.id, balance: uiBalance, price: pricePerToken, valueUsd: uiBalance * pricePerToken, symbol, name };
     }).filter((t: any) => t.balance > 0);
 
-    // Step 3: For tokens with no price from Helius, fall back to DexScreener (handles pump.fun tokens)
+    // Step 3: For tokens with no price from Helius, fall back to Jupiter V3 API
     const missingPrice = tokenList.filter((t: any) => t.price === 0).map((t: any) => t.mint);
     if (missingPrice.length > 0) {
-      console.log(`[ONBOARD-TOKENS] Fetching DexScreener prices for ${missingPrice.length} tokens missing prices...`);
+      console.log(`[ONBOARD-TOKENS] Fetching Jupiter V3 prices for ${missingPrice.length} tokens missing prices...`);
 
-      // DexScreener supports up to 30 tokens per request
-      const CHUNK = 30;
-      const dexPrices: Record<string, number> = {};
+      // Jupiter V3 supports up to 50 tokens per request
+      const CHUNK = 50;
+      const jupPrices: Record<string, number> = {};
+      const jupApiKey = process.env.JUP_API_KEY || "";
 
       for (let i = 0; i < missingPrice.length; i += CHUNK) {
         const chunk = missingPrice.slice(i, i + CHUNK);
         try {
-          const dexRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(",")}`);
-          if (dexRes.ok) {
-            const dexData = await dexRes.json();
-            const pairs: any[] = dexData.pairs || [];
-            // Group by base token address, pick pair with highest liquidity
-            const byMint: Record<string, any[]> = {};
-            for (const pair of pairs) {
-              const addr = pair.baseToken?.address;
-              if (!addr) continue;
-              if (!byMint[addr]) byMint[addr] = [];
-              byMint[addr].push(pair);
-            }
-            for (const [addr, pairList] of Object.entries(byMint)) {
-              const best = pairList.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
-              const price = parseFloat(best.priceUsd || "0");
-              if (price > 0) dexPrices[addr] = price;
+          const jupRes = await fetch(`https://api.jup.ag/price/v3?ids=${chunk.join(",")}`, {
+            headers: jupApiKey ? { "x-api-key": jupApiKey } : {}
+          });
+          if (jupRes.ok) {
+            const jupData = await jupRes.json();
+            const dataObj = jupData || {};
+            for (const [mint, info] of Object.entries(dataObj)) {
+              const price = parseFloat((info as any).usdPrice || "0");
+              if (price > 0) jupPrices[mint] = price;
             }
           }
         } catch (e: any) {
-          console.warn(`[ONBOARD-TOKENS] DexScreener chunk failed: ${e.message}`);
+          console.warn(`[ONBOARD-TOKENS] Jupiter V3 chunk failed: ${e.message}`);
         }
       }
 
-      // Merge DexScreener prices back into tokenList
+      // Merge Jupiter V3 prices back into tokenList
       for (const token of tokenList) {
-        if (token.price === 0 && dexPrices[token.mint]) {
-          token.price = dexPrices[token.mint];
+        if (token.price === 0 && jupPrices[token.mint]) {
+          token.price = jupPrices[token.mint];
           token.valueUsd = token.balance * token.price;
         }
       }
