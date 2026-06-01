@@ -3686,65 +3686,129 @@ app.get("/api/onboard/wallet-tokens", async (req, res) => {
     const heliusKey = process.env.HELIUS_API_KEY || "";
     const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`;
 
-    // Step 1: Helius DAS getAssetsByOwner — returns balances + prices for most tokens
-    const allTokens: any[] = [];
-    let page = 1;
-    const limit = 100;
+    // Step 1: Query token accounts (Fungible SPL & Token-2022) using standard Solana RPC
+    const tokenList: any[] = [];
 
-    while (true) {
-      const rpcRes = await fetch(rpcUrl, {
+    // A. SPL Tokens
+    const splRes = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getTokenAccountsByOwner",
+        params: [
+          walletAddress,
+          { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+          { encoding: "jsonParsed" }
+        ]
+      })
+    });
+    const splData = splRes.ok ? await splRes.json() : null;
+    const splAccounts = splData?.result?.value || [];
+
+    // B. Token-2022
+    const t22Res = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "getTokenAccountsByOwner",
+        params: [
+          walletAddress,
+          { programId: "TokenzQdBNbMcq6XX7zJst91J66rjYE7zx6Fd7b2T3a" },
+          { encoding: "jsonParsed" }
+        ]
+      })
+    });
+    const t22Data = t22Res.ok ? await t22Res.json() : null;
+    const t22Accounts = t22Data?.result?.value || [];
+
+    const allAccounts = [...splAccounts, ...t22Accounts];
+
+    for (const item of allAccounts) {
+      const info = item.account?.data?.parsed?.info || {};
+      const mint = info.mint || "";
+      const tokenAmount = info.tokenAmount || {};
+      const balance = tokenAmount.uiAmount || 0;
+      const decimals = tokenAmount.decimals ?? 0;
+      if (balance > 0 && mint) {
+        tokenList.push({ mint, balance, decimals });
+      }
+    }
+
+    // C. Native SOL
+    try {
+      const solRes = await fetch(rpcUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          jsonrpc: "2.0", id: 1,
-          method: "getAssetsByOwner",
-          params: {
-            ownerAddress: walletAddress,
-            page,
-            limit,
-            displayOptions: { showFungible: true, showNativeBalance: false }
-          }
+          jsonrpc: "2.0",
+          id: 3,
+          method: "getBalance",
+          params: [walletAddress]
         })
       });
-
-      if (!rpcRes.ok) throw new Error(`Helius DAS error: HTTP ${rpcRes.status}`);
-      const data = await rpcRes.json();
-      if (data.error) throw new Error(`Helius DAS RPC error: ${data.error.message}`);
-
-      const items = data.result?.items || [];
-      const fungible = items.filter((item: any) => item.interface === "FungibleToken");
-      allTokens.push(...fungible);
-
-      if (items.length < limit) break;
-      page++;
+      const solData = solRes.ok ? await solRes.json() : null;
+      const solBalance = (solData?.result?.value || 0) / 1e9;
+      if (solBalance > 0) {
+        tokenList.push({
+          mint: "So11111111111111111111111111111111111111112",
+          balance: solBalance,
+          decimals: 9
+        });
+      }
+    } catch (e) {
+      console.warn("[ONBOARD-TOKENS] SOL fetch failed:", e);
     }
 
-    console.log(`[ONBOARD-TOKENS] Found ${allTokens.length} fungible tokens for ${walletAddress}`);
+    console.log(`[ONBOARD-TOKENS] Found ${tokenList.length} total active mints for ${walletAddress}`);
 
-    // Step 2: Build initial token list from Helius data
-    const tokenList = allTokens.map((item: any) => {
-      const info = item.token_info || {};
-      const rawBalance = info.balance || 0;
-      const decimals = info.decimals ?? 0;
-      const uiBalance = rawBalance / Math.pow(10, decimals);
-      const pricePerToken = info.price_info?.price_per_token || 0;
-      const symbol = info.symbol || item.content?.metadata?.symbol || "";
-      const name = item.content?.metadata?.name || symbol;
-      return { mint: item.id, balance: uiBalance, price: pricePerToken, valueUsd: uiBalance * pricePerToken, symbol, name };
-    }).filter((t: any) => t.balance > 0);
+    if (tokenList.length === 0) {
+      return res.json({ tokens: [] });
+    }
 
-    // Step 3: For tokens with no price from Helius, fall back to Jupiter V3 API
-    const missingPrice = tokenList.filter((t: any) => t.price === 0).map((t: any) => t.mint);
+    // Step 2: Fetch names, symbols, and initial prices from DexScreener (completely free & bulk-friendly)
+    const dexData: Record<string, { symbol: string, name: string, price: number }> = {};
+    const mints = tokenList.map(t => t.mint);
+    const CHUNK_SIZE = 30;
+
+    for (let i = 0; i < mints.length; i += CHUNK_SIZE) {
+      const chunk = mints.slice(i, i + CHUNK_SIZE);
+      try {
+        const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(",")}`);
+        if (res.ok) {
+          const data = await res.json();
+          const pairs = data.pairs || [];
+          for (const pair of pairs) {
+            const baseToken = pair.baseToken || {};
+            const address = baseToken.address;
+            const price = parseFloat(pair.priceUsd || "0");
+            if (address && (!dexData[address] || price > 0)) {
+              dexData[address] = {
+                symbol: baseToken.symbol || "",
+                name: baseToken.name || "",
+                price: price
+              };
+            }
+          }
+        }
+      } catch (err) {
+        console.error("[ONBOARD-TOKENS] DexScreener fetch chunk error:", err);
+      }
+    }
+
+    // Step 3: For tokens missing price from DexScreener, fetch from Jupiter V3 Price API
+    const missingPrice = tokenList.filter(t => !dexData[t.mint] || dexData[t.mint].price === 0).map(t => t.mint);
     if (missingPrice.length > 0) {
-      console.log(`[ONBOARD-TOKENS] Fetching Jupiter V3 prices for ${missingPrice.length} tokens missing prices...`);
-
-      // Jupiter V3 supports up to 50 tokens per request
-      const CHUNK = 50;
+      console.log(`[ONBOARD-TOKENS] Fetching Jupiter V3 prices for ${missingPrice.length} tokens...`);
+      const JUP_CHUNK = 50;
       const jupPrices: Record<string, number> = {};
       const jupApiKey = process.env.JUP_API_KEY || "";
 
-      for (let i = 0; i < missingPrice.length; i += CHUNK) {
-        const chunk = missingPrice.slice(i, i + CHUNK);
+      for (let i = 0; i < missingPrice.length; i += JUP_CHUNK) {
+        const chunk = missingPrice.slice(i, i + JUP_CHUNK);
         try {
           const jupRes = await fetch(`https://api.jup.ag/price/v3?ids=${chunk.join(",")}`, {
             headers: jupApiKey ? { "x-api-key": jupApiKey } : {}
@@ -3758,21 +3822,56 @@ app.get("/api/onboard/wallet-tokens", async (req, res) => {
             }
           }
         } catch (e: any) {
-          console.warn(`[ONBOARD-TOKENS] Jupiter V3 chunk failed: ${e.message}`);
+          console.warn(`[ONBOARD-TOKENS] Jupiter price fetch failed: ${e.message}`);
         }
       }
 
-      // Merge Jupiter V3 prices back into tokenList
-      for (const token of tokenList) {
-        if (token.price === 0 && jupPrices[token.mint]) {
-          token.price = jupPrices[token.mint];
-          token.valueUsd = token.balance * token.price;
+      for (const mint of missingPrice) {
+        if (jupPrices[mint]) {
+          if (!dexData[mint]) {
+            dexData[mint] = { symbol: "", name: "", price: 0 };
+          }
+          dexData[mint].price = jupPrices[mint];
         }
       }
     }
 
-    // Step 4: Filter for > $8 USD value and sort
-    const eligibleTokens = tokenList
+    // Step 4: Map and filter metadata with hardcoded fallbacks
+    const HARDCODED_METADATA: Record<string, { symbol: string, name: string }> = {
+      "So11111111111111111111111111111111111111112": { symbol: "SOL", name: "Solana" },
+      "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": { symbol: "USDC", name: "USD Coin" },
+      "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": { symbol: "USDT", name: "Tether USD" },
+      "4nV5gNwwP68zUDat26ySChREqVaQaLudfJBkSgEzpump": { symbol: "BOBO", name: "Bobo" }
+    };
+
+    const finalTokens = tokenList.map((token: any) => {
+      const dexInfo = dexData[token.mint] || {};
+      let price = dexInfo.price || 0;
+      let symbol = dexInfo.symbol || "";
+      let name = dexInfo.name || "";
+
+      if (HARDCODED_METADATA[token.mint]) {
+        symbol = HARDCODED_METADATA[token.mint].symbol;
+        name = HARDCODED_METADATA[token.mint].name;
+      }
+
+      if (!symbol) {
+        symbol = token.mint.slice(0, 4) + "..." + token.mint.slice(-4);
+        name = symbol;
+      }
+
+      return {
+        mint: token.mint,
+        balance: token.balance,
+        price,
+        valueUsd: token.balance * price,
+        symbol,
+        name
+      };
+    });
+
+    // Step 5: Filter for > $8 USD value and sort
+    const eligibleTokens = finalTokens
       .filter((t: any) => t.valueUsd > 8.0)
       .sort((a: any, b: any) => b.valueUsd - a.valueUsd);
 
