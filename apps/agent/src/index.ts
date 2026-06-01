@@ -3683,8 +3683,7 @@ app.get("/api/onboard/wallet-tokens", async (req, res) => {
     const walletAddress = req.query.walletAddress as string;
     if (!walletAddress) return res.status(400).json({ error: "Missing walletAddress" });
 
-    const heliusKey = process.env.HELIUS_API_KEY || "";
-    const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`;
+    const rpcUrl = process.env.HELIUS_RPC_URL || `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY || ""}`;
 
     // Step 1: Query token accounts (Fungible SPL & Token-2022) using standard Solana RPC
     const tokenList: any[] = [];
@@ -3769,88 +3768,54 @@ app.get("/api/onboard/wallet-tokens", async (req, res) => {
       return res.json({ tokens: [] });
     }
 
-    // Step 2: Fetch names, symbols, and prices from Jupiter Tokens V2 Search API in chunks of 30
-    const jupData: Record<string, { symbol: string, name: string, price: number }> = {};
+    // Step 2: Fetch prices from Jupiter Price API V3 in chunks of 50
+    const jupData: Record<string, { price: number; decimals: number }> = {};
     const mints = tokenList.map(t => t.mint);
-    const CHUNK_SIZE = 30;
+    const CHUNK_SIZE = 50;
     const jupApiKey = process.env.JUP_API_KEY || "";
 
     for (let i = 0; i < mints.length; i += CHUNK_SIZE) {
       const chunk = mints.slice(i, i + CHUNK_SIZE);
       try {
-        const res = await fetch(`https://api.jup.ag/tokens/v2/search?query=${chunk.join(",")}`, {
+        const res = await fetch(`https://api.jup.ag/price/v3?ids=${chunk.join(",")}`, {
           headers: jupApiKey ? { "x-api-key": jupApiKey } : {}
         });
         if (res.ok) {
           const data = await res.json();
-          if (Array.isArray(data)) {
-            for (const item of data) {
-              const address = item.id;
-              const price = parseFloat(item.usdPrice || "0");
-              if (address) {
-                jupData[address] = {
-                  symbol: item.symbol || "",
-                  name: item.name || "",
-                  price: price
-                };
+          if (data && typeof data === "object") {
+            for (const [mint, info] of Object.entries(data)) {
+              if (info && typeof info === "object") {
+                const price = parseFloat((info as any).usdPrice || "0");
+                const decimals = parseInt((info as any).decimals ?? "0", 10);
+                jupData[mint] = { price, decimals };
               }
             }
           }
+        } else {
+          console.warn(`[ONBOARD-TOKENS] Jupiter V3 price query failed with status: ${res.status}`);
         }
-      } catch (err) {
-        console.error("[ONBOARD-TOKENS] Jupiter search chunk error:", err);
+      } catch (err: any) {
+        console.error("[ONBOARD-TOKENS] Jupiter V3 price chunk error:", err.message);
       }
     }
 
-    // Step 3: For tokens missing price from search API, fetch from Jupiter V3 Price API
-    const missingPrice = tokenList.filter(t => !jupData[t.mint] || jupData[t.mint].price === 0).map(t => t.mint);
-    if (missingPrice.length > 0) {
-      console.log(`[ONBOARD-TOKENS] Fetching Jupiter V3 prices for ${missingPrice.length} tokens...`);
-      const JUP_CHUNK = 50;
-      const jupPrices: Record<string, number> = {};
-
-      for (let i = 0; i < missingPrice.length; i += JUP_CHUNK) {
-        const chunk = missingPrice.slice(i, i + JUP_CHUNK);
-        try {
-          const jupRes = await fetch(`https://api.jup.ag/price/v3?ids=${chunk.join(",")}`, {
-            headers: jupApiKey ? { "x-api-key": jupApiKey } : {}
-          });
-          if (jupRes.ok) {
-            const jupDataObj = await jupRes.json();
-            const dataObj = jupDataObj || {};
-            for (const [mint, info] of Object.entries(dataObj)) {
-              const price = parseFloat((info as any).usdPrice || "0");
-              if (price > 0) jupPrices[mint] = price;
-            }
-          }
-        } catch (e: any) {
-          console.warn(`[ONBOARD-TOKENS] Jupiter price fetch failed: ${e.message}`);
-        }
-      }
-
-      for (const mint of missingPrice) {
-        if (jupPrices[mint]) {
-          if (!jupData[mint]) {
-            jupData[mint] = { symbol: "", name: "", price: 0 };
-          }
-          jupData[mint].price = jupPrices[mint];
-        }
-      }
-    }
-
-    // Step 4: Map and filter metadata with hardcoded fallbacks
+    // Step 3: Map and filter metadata with hardcoded fallbacks
     const HARDCODED_METADATA: Record<string, { symbol: string, name: string }> = {
       "So11111111111111111111111111111111111111112": { symbol: "SOL", name: "Solana" },
       "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": { symbol: "USDC", name: "USD Coin" },
       "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": { symbol: "USDT", name: "Tether USD" },
-      "4nV5gNwwP68zUDat26ySChREqVaQaLudfJBkSgEzpump": { symbol: "BOBO", name: "Bobo" }
+      "4nV5gNwwP68zUDat26ySChREqVaQaLudfJBkSgEzpump": { symbol: "BOBO", name: "Bobo" },
+      "BywoEP4ch5EWb7okZ7wqKuwpnSKr5uuhbzo98XRgpump": { symbol: "BOBO", name: "Bobo" }
     };
+    if (process.env.AGENT_TOKEN_MINT) {
+      HARDCODED_METADATA[process.env.AGENT_TOKEN_MINT] = { symbol: "BOBO", name: "Bobo" };
+    }
 
     const finalTokens = tokenList.map((token: any) => {
       const jupInfo = jupData[token.mint] || {};
-      let price = jupInfo.price || 0;
-      let symbol = jupInfo.symbol || "";
-      let name = jupInfo.name || "";
+      const price = jupInfo.price || 0;
+      let symbol = "";
+      let name = "";
 
       if (HARDCODED_METADATA[token.mint]) {
         symbol = HARDCODED_METADATA[token.mint].symbol;
