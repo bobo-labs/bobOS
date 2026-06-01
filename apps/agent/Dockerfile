@@ -21,6 +21,7 @@ FROM node:18-slim AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
+ENV PORT=3001
 
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
