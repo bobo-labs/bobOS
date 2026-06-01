@@ -2655,7 +2655,7 @@ async function forwardTweetInternally(params: { tweetId: string; tweetText: stri
       });
 
       if (response.error) {
-        console.error(`[POLLER] Post failed for community ${tokenAddr}:`, response.error);
+        console.warn(`[POLLER] Post failed for community ${tokenAddr} (skipping):`, response.error);
       } else {
         successCount++;
       }
@@ -3764,20 +3764,6 @@ app.get("/api/onboard/wallet-tokens", async (req, res) => {
       }
     }
 
-    // C. Native SOL
-    try {
-      const solBalanceVal = await queryRpc("getBalance", [walletAddress]);
-      const solBalance = (solBalanceVal?.value || 0) / 1e9;
-      if (solBalance > 0) {
-        tokenList.push({
-          mint: "So11111111111111111111111111111111111111112",
-          balance: solBalance,
-          decimals: 9
-        });
-      }
-    } catch (e: any) {
-      console.warn("[ONBOARD-RPC] Failed to query native SOL:", e.message);
-    }
 
     console.log(`[ONBOARD-TOKENS] Found ${tokenList.length} total active mints for ${walletAddress}`);
 
