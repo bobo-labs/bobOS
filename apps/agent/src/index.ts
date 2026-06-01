@@ -3769,43 +3769,45 @@ app.get("/api/onboard/wallet-tokens", async (req, res) => {
       return res.json({ tokens: [] });
     }
 
-    // Step 2: Fetch names, symbols, and initial prices from DexScreener (completely free & bulk-friendly)
-    const dexData: Record<string, { symbol: string, name: string, price: number }> = {};
+    // Step 2: Fetch names, symbols, and prices from Jupiter Tokens V2 Search API in chunks of 30
+    const jupData: Record<string, { symbol: string, name: string, price: number }> = {};
     const mints = tokenList.map(t => t.mint);
     const CHUNK_SIZE = 30;
+    const jupApiKey = process.env.JUP_API_KEY || "";
 
     for (let i = 0; i < mints.length; i += CHUNK_SIZE) {
       const chunk = mints.slice(i, i + CHUNK_SIZE);
       try {
-        const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(",")}`);
+        const res = await fetch(`https://api.jup.ag/tokens/v2/search?query=${chunk.join(",")}`, {
+          headers: jupApiKey ? { "x-api-key": jupApiKey } : {}
+        });
         if (res.ok) {
           const data = await res.json();
-          const pairs = data.pairs || [];
-          for (const pair of pairs) {
-            const baseToken = pair.baseToken || {};
-            const address = baseToken.address;
-            const price = parseFloat(pair.priceUsd || "0");
-            if (address && (!dexData[address] || price > 0)) {
-              dexData[address] = {
-                symbol: baseToken.symbol || "",
-                name: baseToken.name || "",
-                price: price
-              };
+          if (Array.isArray(data)) {
+            for (const item of data) {
+              const address = item.id;
+              const price = parseFloat(item.usdPrice || "0");
+              if (address) {
+                jupData[address] = {
+                  symbol: item.symbol || "",
+                  name: item.name || "",
+                  price: price
+                };
+              }
             }
           }
         }
       } catch (err) {
-        console.error("[ONBOARD-TOKENS] DexScreener fetch chunk error:", err);
+        console.error("[ONBOARD-TOKENS] Jupiter search chunk error:", err);
       }
     }
 
-    // Step 3: For tokens missing price from DexScreener, fetch from Jupiter V3 Price API
-    const missingPrice = tokenList.filter(t => !dexData[t.mint] || dexData[t.mint].price === 0).map(t => t.mint);
+    // Step 3: For tokens missing price from search API, fetch from Jupiter V3 Price API
+    const missingPrice = tokenList.filter(t => !jupData[t.mint] || jupData[t.mint].price === 0).map(t => t.mint);
     if (missingPrice.length > 0) {
       console.log(`[ONBOARD-TOKENS] Fetching Jupiter V3 prices for ${missingPrice.length} tokens...`);
       const JUP_CHUNK = 50;
       const jupPrices: Record<string, number> = {};
-      const jupApiKey = process.env.JUP_API_KEY || "";
 
       for (let i = 0; i < missingPrice.length; i += JUP_CHUNK) {
         const chunk = missingPrice.slice(i, i + JUP_CHUNK);
@@ -3814,8 +3816,8 @@ app.get("/api/onboard/wallet-tokens", async (req, res) => {
             headers: jupApiKey ? { "x-api-key": jupApiKey } : {}
           });
           if (jupRes.ok) {
-            const jupData = await jupRes.json();
-            const dataObj = jupData || {};
+            const jupDataObj = await jupRes.json();
+            const dataObj = jupDataObj || {};
             for (const [mint, info] of Object.entries(dataObj)) {
               const price = parseFloat((info as any).usdPrice || "0");
               if (price > 0) jupPrices[mint] = price;
@@ -3828,10 +3830,10 @@ app.get("/api/onboard/wallet-tokens", async (req, res) => {
 
       for (const mint of missingPrice) {
         if (jupPrices[mint]) {
-          if (!dexData[mint]) {
-            dexData[mint] = { symbol: "", name: "", price: 0 };
+          if (!jupData[mint]) {
+            jupData[mint] = { symbol: "", name: "", price: 0 };
           }
-          dexData[mint].price = jupPrices[mint];
+          jupData[mint].price = jupPrices[mint];
         }
       }
     }
@@ -3845,10 +3847,10 @@ app.get("/api/onboard/wallet-tokens", async (req, res) => {
     };
 
     const finalTokens = tokenList.map((token: any) => {
-      const dexInfo = dexData[token.mint] || {};
-      let price = dexInfo.price || 0;
-      let symbol = dexInfo.symbol || "";
-      let name = dexInfo.name || "";
+      const jupInfo = jupData[token.mint] || {};
+      let price = jupInfo.price || 0;
+      let symbol = jupInfo.symbol || "";
+      let name = jupInfo.name || "";
 
       if (HARDCODED_METADATA[token.mint]) {
         symbol = HARDCODED_METADATA[token.mint].symbol;
