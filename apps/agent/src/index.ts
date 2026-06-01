@@ -2836,6 +2836,7 @@ export async function startTwitterFilteredStream() {
 
     activeStreamAbortController = new AbortController();
     const signal = activeStreamAbortController.signal;
+    let isKeepAliveTimeout = false;
 
     try {
       console.log("[POLLER] Retrieving bearer token...");
@@ -2882,6 +2883,7 @@ export async function startTwitterFilteredStream() {
       const keepAliveInterval = setInterval(() => {
         if (Date.now() - lastChunkReceivedAt > 35000) {
           console.warn("[POLLER] Stream keep-alive timeout! No data received for 35s. Reconnecting...");
+          isKeepAliveTimeout = true;
           clearInterval(keepAliveInterval);
           if (activeStreamAbortController) {
             activeStreamAbortController.abort();
@@ -2944,7 +2946,14 @@ export async function startTwitterFilteredStream() {
 
     } catch (err: any) {
       if (err.name === "AbortError" || signal.aborted) {
-        console.log("[POLLER] Stream connection aborted cleanly.");
+        if (isKeepAliveTimeout) {
+          console.log("[POLLER] Stream connection aborted due to keep-alive timeout. Reconnecting...");
+          setTimeout(() => {
+            connect().catch(e => console.error("[POLLER] Reconnect exception:", e));
+          }, reconnectDelay);
+        } else {
+          console.log("[POLLER] Stream connection aborted cleanly.");
+        }
       } else {
         console.error("[POLLER] Stream connection error:", err.message || err);
         // Exponential backoff reconnect
@@ -3796,7 +3805,7 @@ app.post("/api/onboard/save-communities", async (req, res) => {
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
-const PORT = parseInt(process.env.SERVER_PORT || "3001");
+const PORT = parseInt(process.env.PORT || process.env.SERVER_PORT || "3001");
 app.listen(PORT, async () => {
   console.log(`[Bobo Agent] Custom Express server running on port ${PORT}`);
   console.log(`[Bobo Agent] Endpoints:`);
