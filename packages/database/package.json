@@ -9,7 +9,8 @@
     "pg": "^8.11.5"
   },
   "scripts": {
-    "db:push": "drizzle-kit push:pg",
+    "db:push": "echo 'Skipping automated drizzle-kit push in CI to prevent interactive prompt hangs. Please run migrations locally or use drizzle-kit migrate.'",
+    "db:push:local": "drizzle-kit push:pg",
     "db:generate": "drizzle-kit generate:pg",
     "db:studio": "drizzle-kit studio"
   },
