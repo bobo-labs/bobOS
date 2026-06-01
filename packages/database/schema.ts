@@ -21,7 +21,7 @@ export const ccLinkedAccounts = pgTable("cc_linked_accounts", {
 // Admin generates these manually (or later: auto-generated after fee payment).
 export const inviteCodes = pgTable("invite_codes", {
   id: uuid("id").primaryKey().defaultRandom(),
-  code: varchar("code", { length: 64 }).notNull().unique(),
+  code: varchar("code", { length: 64 }).notNull(),
   used: boolean("used").notNull().default(false),
   used_by: varchar("used_by", { length: 100 }),   // twitter_id or username once consumed
   note: varchar("note", { length: 200 }),           // optional admin label (e.g. "@username")
