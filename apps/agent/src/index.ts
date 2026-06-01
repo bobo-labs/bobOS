@@ -3683,46 +3683,73 @@ app.get("/api/onboard/wallet-tokens", async (req, res) => {
     const walletAddress = req.query.walletAddress as string;
     if (!walletAddress) return res.status(400).json({ error: "Missing walletAddress" });
 
-    const rpcUrl = process.env.HELIUS_RPC_URL || `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY || ""}`;
+    const rpcUrls = [
+      process.env.HELIUS_RPC_URL,
+      process.env.HELIUS_API_KEY ? `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}` : null,
+      "https://api.mainnet-beta.solana.com",
+      "https://rpc.ankr.com/solana"
+    ].filter(Boolean) as string[];
+
+    async function queryRpc(method: string, params: any[]): Promise<any> {
+      let lastError = null;
+      for (const url of rpcUrls) {
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: Math.floor(Math.random() * 1000000),
+              method,
+              params
+            })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.result !== undefined) {
+              return data.result;
+            } else if (data && data.error) {
+              console.warn(`[ONBOARD-RPC] RPC error from ${url.split('?')[0]}:`, data.error);
+            }
+          } else {
+            console.warn(`[ONBOARD-RPC] HTTP ${res.status} from ${url.split('?')[0]}`);
+          }
+        } catch (e: any) {
+          console.warn(`[ONBOARD-RPC] Fetch failed for ${url.split('?')[0]}:`, e.message);
+          lastError = e;
+        }
+      }
+      throw lastError || new Error(`All RPC endpoints failed for ${method}`);
+    }
 
     // Step 1: Query token accounts (Fungible SPL & Token-2022) using standard Solana RPC
     const tokenList: any[] = [];
 
     // A. SPL Tokens
-    const splRes = await fetch(rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "getTokenAccountsByOwner",
-        params: [
-          walletAddress,
-          { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
-          { encoding: "jsonParsed" }
-        ]
-      })
-    });
-    const splData = splRes.ok ? await splRes.json() : null;
-    const splAccounts = splData?.result?.value || [];
+    let splAccounts: any[] = [];
+    try {
+      const res = await queryRpc("getTokenAccountsByOwner", [
+        walletAddress,
+        { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+        { encoding: "jsonParsed" }
+      ]);
+      splAccounts = res?.value || [];
+    } catch (e: any) {
+      console.error("[ONBOARD-RPC] Failed to query SPL tokens:", e.message);
+    }
 
     // B. Token-2022
-    const t22Res = await fetch(rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 2,
-        method: "getTokenAccountsByOwner",
-        params: [
-          walletAddress,
-          { programId: "TokenzQdBNbMcq6XX7zJst91J66rjYE7zx6Fd7b2T3a" },
-          { encoding: "jsonParsed" }
-        ]
-      })
-    });
-    const t22Data = t22Res.ok ? await t22Res.json() : null;
-    const t22Accounts = t22Data?.result?.value || [];
+    let t22Accounts: any[] = [];
+    try {
+      const res = await queryRpc("getTokenAccountsByOwner", [
+        walletAddress,
+        { programId: "TokenzQdBNbMcq6XX7zJst91J66rjYE7zx6Fd7b2T3a" },
+        { encoding: "jsonParsed" }
+      ]);
+      t22Accounts = res?.value || [];
+    } catch (e: any) {
+      console.error("[ONBOARD-RPC] Failed to query Token-2022 tokens:", e.message);
+    }
 
     const allAccounts = [...splAccounts, ...t22Accounts];
 
@@ -3739,18 +3766,8 @@ app.get("/api/onboard/wallet-tokens", async (req, res) => {
 
     // C. Native SOL
     try {
-      const solRes = await fetch(rpcUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 3,
-          method: "getBalance",
-          params: [walletAddress]
-        })
-      });
-      const solData = solRes.ok ? await solRes.json() : null;
-      const solBalance = (solData?.result?.value || 0) / 1e9;
+      const solBalanceVal = await queryRpc("getBalance", [walletAddress]);
+      const solBalance = (solBalanceVal?.value || 0) / 1e9;
       if (solBalance > 0) {
         tokenList.push({
           mint: "So11111111111111111111111111111111111111112",
@@ -3758,8 +3775,8 @@ app.get("/api/onboard/wallet-tokens", async (req, res) => {
           decimals: 9
         });
       }
-    } catch (e) {
-      console.warn("[ONBOARD-TOKENS] SOL fetch failed:", e);
+    } catch (e: any) {
+      console.warn("[ONBOARD-RPC] Failed to query native SOL:", e.message);
     }
 
     console.log(`[ONBOARD-TOKENS] Found ${tokenList.length} total active mints for ${walletAddress}`);
