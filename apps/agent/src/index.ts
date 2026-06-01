@@ -3743,7 +3743,7 @@ app.get("/api/onboard/wallet-tokens", async (req, res) => {
     try {
       const res = await queryRpc("getTokenAccountsByOwner", [
         walletAddress,
-        { programId: "TokenzQdBNbMcq6XX7zJst91J66rjYE7zx6Fd7b2T3a" },
+        { programId: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" },
         { encoding: "jsonParsed" }
       ]);
       t22Accounts = res?.value || [];
