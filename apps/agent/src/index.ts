@@ -3075,8 +3075,8 @@ app.post("/admin/generate-invite", async (req, res) => {
   const code = "bobo-" + crypto.randomBytes(8).toString("hex");
   try {
     await db.insert(inviteCodes).values({ code, note });
-    const baseUrl = process.env.AGENT_PUBLIC_URL || "https://agent-production-6e6f.up.railway.app";
-    const link = `${baseUrl}/onboard?code=${code}`;
+    const inviteDomain = process.env.INVITE_DOMAIN || "https://cc.bobolabs.xyz";
+    const link = `${inviteDomain}/${code}`;
     console.log(`[ADMIN] Generated invite code: ${code} (${note || "no label"})`);
     return res.json({ code, link, note });
   } catch (err: any) {
@@ -3097,8 +3097,8 @@ app.get("/admin/generate-invite", async (req, res) => {
   const code = "bobo-" + crypto.randomBytes(8).toString("hex");
   try {
     await db.insert(inviteCodes).values({ code, note });
-    const baseUrl = process.env.AGENT_PUBLIC_URL || "https://agent-production-6e6f.up.railway.app";
-    const link = `${baseUrl}/onboard?code=${code}`;
+    const inviteDomain = process.env.INVITE_DOMAIN || "https://cc.bobolabs.xyz";
+    const link = `${inviteDomain}/${code}`;
     console.log(`[ADMIN] Generated invite code: ${code} (${note || "no label"})`);
     // Render a nice page with the copyable link
     res.setHeader("Content-Type", "text/html");
@@ -3147,6 +3147,22 @@ app.get("/admin/generate-invite", async (req, res) => {
   }
 });
 
+/** GET /:code — short invitation link redirect */
+app.get("/:code", async (req, res, next) => {
+  const code = req.params.code;
+  if (code && code.startsWith("bobo-")) {
+    try {
+      const [invite] = await db.select().from(inviteCodes).where(eq(inviteCodes.code as any, code as any) as any);
+      if (invite) {
+        return res.redirect(`/onboard?code=${code}`);
+      }
+    } catch (err) {
+      console.error("[ONBOARD] Short link redirect error:", err);
+    }
+  }
+  next();
+});
+
 app.get("/onboard", async (req, res) => {
   const baseUrl = process.env.AGENT_PUBLIC_URL || "https://agent-production-6e6f.up.railway.app";
   const code = req.query.code as string | undefined;
@@ -3178,27 +3194,142 @@ app.get("/onboard", async (req, res) => {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Connect to Bobo Community</title>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Space+Mono&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono&display=swap" rel="stylesheet">
   <style>
-    :root { --bg:#0B0D17; --accent:#F97316; --cyan:#22D3EE; --text:#F3F4F6; --muted:#9CA3AF; --card:rgba(255,255,255,0.04); --border:rgba(255,255,255,0.08); }
+    @font-face {
+      font-family: 'Ugly Dave';
+      src: url('https://ai.bobolabs.xyz/fonts/ugly-dave.woff2') format('woff2');
+      font-weight: normal;
+      font-style: normal;
+      font-display: swap;
+    }
+    :root {
+      --color-primary-red: #be0129;
+      --color-earthy-brown: #6f452d;
+      --color-warning-yellow: #f9ca71;
+      --color-pitch-black: #261c1a;
+      --color-stark-white: #fee1bf;
+    }
     * { box-sizing:border-box; margin:0; padding:0; }
-    body { font-family:'Outfit',sans-serif; background:var(--bg); background-image:radial-gradient(circle at 15% 20%,rgba(249,115,22,.12) 0%,transparent 45%),radial-gradient(circle at 85% 80%,rgba(34,211,238,.08) 0%,transparent 45%); color:var(--text); min-height:100vh; display:flex; align-items:center; justify-content:center; padding:2rem; }
-    .card { max-width:500px; width:100%; background:var(--card); border:1px solid var(--border); border-radius:24px; padding:3rem 2.5rem; box-shadow:0 24px 60px rgba(0,0,0,.6); animation:up .7s ease-out; }
+    body {
+      font-family: 'Ugly Dave', sans-serif;
+      background-color: var(--color-stark-white);
+      color: var(--color-pitch-black);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+      position: relative;
+    }
+    .top-bar {
+      position: absolute;
+      top: 1.5rem;
+      left: 1.5rem;
+      z-index: 100;
+    }
+    .logo-link {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      text-decoration: none;
+      transition: transform 100ms ease;
+    }
+    .logo-link:hover {
+      transform: scale(1.05);
+    }
+    .bobo-logo {
+      width: 40px;
+      height: 40px;
+    }
+    .bobo-logotype {
+      height: 18px;
+    }
+    .card {
+      max-width: 500px;
+      width: 100%;
+      background: var(--color-stark-white);
+      border: 3px solid var(--color-pitch-black);
+      border-radius: 255px 15px 225px 15px/15px 225px 15px 255px;
+      box-shadow: 6px 6px 0px 0px var(--color-pitch-black);
+      padding: 3rem 2.5rem;
+      animation: up .5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
     @keyframes up { from{opacity:0;transform:translateY(24px)} to{opacity:1;transform:translateY(0)} }
-    .bear { font-size:3.5rem; text-align:center; margin-bottom:1rem; }
-    h1 { font-size:2rem; font-weight:800; text-align:center; background:linear-gradient(135deg,#fff 30%,var(--cyan)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; margin-bottom:.5rem; }
-    .sub { text-align:center; color:var(--muted); font-size:.95rem; line-height:1.6; margin-bottom:2rem; }
-    .feature { display:flex; align-items:flex-start; gap:.75rem; margin-bottom:1rem; }
-    .feature-icon { font-size:1.25rem; margin-top:.1rem; }
-    .feature-text { font-size:.875rem; color:var(--muted); line-height:1.5; }
-    .feature-text strong { color:var(--text); }
-    .divider { border:none; border-top:1px solid var(--border); margin:1.75rem 0; }
-    .btn { display:block; width:100%; padding:1rem; border-radius:14px; border:none; font-family:inherit; font-size:1.05rem; font-weight:700; cursor:pointer; text-decoration:none; text-align:center; background:linear-gradient(135deg,var(--accent),#FB923C); color:white; transition:all .2s; box-shadow:0 4px 20px rgba(249,115,22,.35); }
-    .btn:hover { transform:translateY(-2px); box-shadow:0 8px 30px rgba(249,115,22,.5); }
-    .note { text-align:center; font-size:.75rem; color:var(--muted); margin-top:1rem; }
+    .bear { font-size:4rem; text-align:center; margin-bottom:1rem; }
+    h1 {
+      font-size: 2.2rem;
+      font-weight: 900;
+      text-align: center;
+      text-transform: uppercase;
+      margin-bottom: .75rem;
+      line-height: 1.1;
+    }
+    .sub {
+      text-align: center;
+      font-size: 1.05rem;
+      line-height: 1.4;
+      margin-bottom: 2rem;
+    }
+    .feature { display: flex; align-items: flex-start; gap: .75rem; margin-bottom: 1.25rem; font-size: 1rem; }
+    .feature-icon { font-size: 1.25rem; margin-top: -0.1rem; }
+    .feature-text { line-height: 1.4; }
+    .feature-text strong { font-weight: 900; text-transform: uppercase; }
+    .divider { border: none; border-top: 3px solid var(--color-pitch-black); margin: 1.75rem 0; }
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 1.1rem;
+      font-family: 'Ugly Dave', sans-serif;
+      font-size: 1.4rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      text-align: center;
+      text-decoration: none;
+      background-color: var(--color-primary-red);
+      color: var(--color-stark-white);
+      border: 3px solid var(--color-pitch-black);
+      box-shadow: 4px 4px 0px 0px var(--color-pitch-black);
+      border-radius: 255px 15px 225px 15px/15px 225px 15px 255px;
+      cursor: pointer;
+      transition: transform 100ms ease, box-shadow 100ms ease, background-color 100ms ease, color 100ms ease;
+    }
+    .btn:hover {
+      background-color: var(--color-stark-white);
+      color: var(--color-pitch-black);
+      transform: translate(2px, 2px);
+      box-shadow: 2px 2px 0px 0px var(--color-pitch-black);
+    }
+    .note { text-align: center; font-size: .8rem; margin-top: 1rem; opacity: 0.8; }
+    @media (max-width: 640px) {
+      .top-bar {
+        top: 1rem;
+        left: 1rem;
+      }
+      .bobo-logo {
+        width: 32px;
+        height: 32px;
+      }
+      .bobo-logotype {
+        height: 14px;
+      }
+      .card {
+        padding: 2.5rem 1.5rem;
+      }
+      h1 {
+        font-size: 1.8rem;
+      }
+    }
   </style>
 </head>
 <body>
+  <div class="top-bar">
+    <a href="https://bobolabs.xyz/" target="_blank" rel="noopener noreferrer" class="logo-link">
+      <img src="https://ai.bobolabs.xyz/images/bobo-logo.png" alt="Bobo Logo" class="bobo-logo">
+      <img src="https://ai.bobolabs.xyz/images/bobo-logotype.png" alt="Bobo" class="bobo-logotype">
+    </a>
+  </div>
   <div class="card">
     <div class="bear">🐻</div>
     <h1>Join Bobo's Feed</h1>
@@ -3207,7 +3338,7 @@ app.get("/onboard", async (req, res) => {
     <div class="feature"><span class="feature-icon">🔄</span><div class="feature-text"><strong>Auto token refresh</strong> — Your connection stays active without manual renewal.</div></div>
     <div class="feature"><span class="feature-icon">🔐</span><div class="feature-text"><strong>Non-custodial</strong> — Only tweet forwarding, nothing else. Revoke anytime from CC settings.</div></div>
     <hr class="divider">
-    <a class="btn" href="${baseUrl}/onboard/start?code=${code}">Connect with Coin Communities →</a>
+    <a class="btn" href="${baseUrl}/onboard/start?code=${code}">AUTHORIZE YOUR X</a>
     <p class="note">You'll be redirected to Coin Communities to authorize with your Twitter account.</p>
   </div>
 </body>
@@ -3322,28 +3453,181 @@ app.get("/onboard/callback", async (req, res) => {
     return res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Connected! — Bobo Community</title>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
   <style>
-    * { box-sizing:border-box; margin:0; padding:0; }
-    body { font-family:'Outfit',sans-serif; background:#0B0D17; color:#F3F4F6; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:2rem; }
-    .card { max-width:480px; width:100%; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:24px; padding:3rem 2.5rem; text-align:center; box-shadow:0 24px 60px rgba(0,0,0,.6); animation:up .7s ease-out; }
+    @font-face {
+      font-family: 'Ugly Dave';
+      src: url('https://ai.bobolabs.xyz/fonts/ugly-dave.woff2') format('woff2');
+      font-weight: normal;
+      font-style: normal;
+      font-display: swap;
+    }
+    :root {
+      --color-primary-red: #be0129;
+      --color-earthy-brown: #6f452d;
+      --color-warning-yellow: #f9ca71;
+      --color-pitch-black: #261c1a;
+      --color-stark-white: #fee1bf;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Ugly Dave', sans-serif;
+      background-color: var(--color-stark-white);
+      color: var(--color-pitch-black);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+      position: relative;
+    }
+    .top-bar {
+      position: absolute;
+      top: 1.5rem;
+      left: 1.5rem;
+      z-index: 100;
+    }
+    .logo-link {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      text-decoration: none;
+      transition: transform 100ms ease;
+    }
+    .logo-link:hover {
+      transform: scale(1.05);
+    }
+    .bobo-logo {
+      width: 40px;
+      height: 40px;
+    }
+    .bobo-logotype {
+      height: 18px;
+    }
+    .card {
+      max-width: 500px;
+      width: 100%;
+      background: var(--color-stark-white);
+      border: 3px solid var(--color-pitch-black);
+      border-radius: 255px 15px 225px 15px/15px 225px 15px 255px;
+      box-shadow: 6px 6px 0px 0px var(--color-pitch-black);
+      padding: 3rem 2.5rem;
+      text-align: center;
+      animation: up .5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
     @keyframes up { from{opacity:0;transform:translateY(24px)} to{opacity:1;transform:translateY(0)} }
-    .checkmark { font-size:3.5rem; margin-bottom:1rem; }
-    h1 { font-size:1.75rem; font-weight:800; background:linear-gradient(135deg,#fff 30%,#10B981); -webkit-background-clip:text; -webkit-text-fill-color:transparent; margin-bottom:.5rem; }
-    .handle { font-size:1.1rem; color:#22D3EE; font-weight:600; margin-bottom:1rem; }
-    p { color:#9CA3AF; font-size:.9rem; line-height:1.6; }
-    .pill { display:inline-block; background:rgba(16,185,129,.1); color:#10B981; border-radius:9999px; padding:.25rem .9rem; font-size:.75rem; font-weight:600; margin-top:1.25rem; }
-    .divider { border:none; border-top:1px solid rgba(255,255,255,0.07); margin:1.75rem 0; }
-    .wallet-heading { font-size:.8rem; font-weight:600; color:#9CA3AF; text-transform:uppercase; letter-spacing:.08em; margin-bottom:.75rem; }
-    .btn-wallet { display:inline-flex; align-items:center; gap:.5rem; background:linear-gradient(135deg,#7C3AED,#9333EA); color:#fff; font-family:inherit; font-size:.95rem; font-weight:600; padding:.75rem 1.75rem; border:none; border-radius:12px; cursor:pointer; text-decoration:none; transition:transform .2s,box-shadow .2s; box-shadow:0 4px 20px rgba(147,51,234,.35); }
-    .btn-wallet:hover { transform:translateY(-2px); box-shadow:0 8px 28px rgba(147,51,234,.5); }
-    .skip { display:block; margin-top:.75rem; font-size:.78rem; color:#6B7280; cursor:pointer; }
-    .skip:hover { color:#9CA3AF; }
+    .checkmark { font-size: 4rem; margin-bottom: 1rem; }
+    h1 {
+      font-size: 2.2rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      margin-bottom: .5rem;
+      line-height: 1.1;
+    }
+    .handle {
+      font-size: 1.5rem;
+      color: var(--color-primary-red);
+      font-weight: 900;
+      margin-bottom: 1.5rem;
+      text-transform: uppercase;
+    }
+    p {
+      font-size: 1.05rem;
+      line-height: 1.4;
+      margin-bottom: 1.5rem;
+    }
+    .pill {
+      display: inline-block;
+      background-color: var(--color-warning-yellow);
+      color: var(--color-pitch-black);
+      border: 2px solid var(--color-pitch-black);
+      border-radius: 120px 10px 110px 10px/10px 110px 10px 120px;
+      padding: 0.4rem 1.2rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      font-size: 0.85rem;
+      box-shadow: 2px 2px 0px 0px var(--color-pitch-black);
+      margin-bottom: 1rem;
+    }
+    .divider {
+      border: none;
+      border-top: 3px solid var(--color-pitch-black);
+      margin: 1.75rem 0;
+    }
+    .wallet-heading {
+      font-size: 1.2rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      margin-bottom: 0.75rem;
+    }
+    .btn-wallet {
+      display: block;
+      width: 100%;
+      padding: 1.1rem;
+      font-family: 'Ugly Dave', sans-serif;
+      font-size: 1.4rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      text-align: center;
+      text-decoration: none;
+      background-color: var(--color-primary-red);
+      color: var(--color-stark-white);
+      border: 3px solid var(--color-pitch-black);
+      box-shadow: 4px 4px 0px 0px var(--color-pitch-black);
+      border-radius: 255px 15px 225px 15px/15px 225px 15px 255px;
+      cursor: pointer;
+      transition: transform 100ms ease, box-shadow 100ms ease, background-color 100ms ease, color 100ms ease;
+    }
+    .btn-wallet:hover {
+      background-color: var(--color-stark-white);
+      color: var(--color-pitch-black);
+      transform: translate(2px, 2px);
+      box-shadow: 2px 2px 0px 0px var(--color-pitch-black);
+    }
+    .skip {
+      display: inline-block;
+      margin-top: 1rem;
+      font-size: 0.95rem;
+      font-weight: 900;
+      text-decoration: underline;
+      text-transform: uppercase;
+      cursor: pointer;
+      color: var(--color-pitch-black);
+    }
+    .skip:hover {
+      color: var(--color-primary-red);
+    }
+    @media (max-width: 640px) {
+      .top-bar {
+        top: 1rem;
+        left: 1rem;
+      }
+      .bobo-logo {
+        width: 32px;
+        height: 32px;
+      }
+      .bobo-logotype {
+        height: 14px;
+      }
+      .card {
+        padding: 2.5rem 1.5rem;
+      }
+      h1 {
+        font-size: 1.8rem;
+      }
+    }
   </style>
 </head>
 <body>
+  <div class="top-bar">
+    <a href="https://bobolabs.xyz/" target="_blank" rel="noopener noreferrer" class="logo-link">
+      <img src="https://ai.bobolabs.xyz/images/bobo-logo.png" alt="Bobo Logo" class="bobo-logo">
+      <img src="https://ai.bobolabs.xyz/images/bobo-logotype.png" alt="Bobo" class="bobo-logotype">
+    </a>
+  </div>
   <div class="card">
     <div class="checkmark">✅</div>
     <h1>You're Connected!</h1>
@@ -3352,10 +3636,10 @@ app.get("/onboard/callback", async (req, res) => {
     <div class="pill">Auto-refresh active · No expiry worries</div>
     <hr class="divider">
     <div id="wallet-section">
-      <div class="wallet-heading">🔗 One more step (optional)</div>
-      <p style="margin-bottom:1rem;">Link your Solana wallet so your posts appear under your on-chain identity in the community room.</p>
-      <a class="btn-wallet" href="/onboard/link-wallet?twitter_id=${twitterId}">🪙 Link My Wallet →</a>
-      <span class="skip" onclick="document.getElementById('wallet-section').innerHTML='<p style=color:#6B7280;font-size:.8rem;margin-top:.5rem>You can link your wallet later from the community settings.</p>'">Skip for now</span>
+      <div class="wallet-heading">🔗 One more step</div>
+      <p style="margin-bottom:1.5rem;">Link your Solana wallet so your posts appear under your on-chain identity in the community room.</p>
+      <a class="btn-wallet" href="/onboard/link-wallet?twitter_id=${twitterId}">🪙 Link My Wallet</a>
+      <span class="skip" onclick="document.getElementById('wallet-section').innerHTML='<p style=color:var(--color-earthy-brown);font-size:0.95rem;margin-top:.5rem;font-weight:900;text-transform:uppercase>You can link your wallet later from the community settings.</p>'">Skip for now</span>
     </div>
   </div>
 </body>
@@ -3376,43 +3660,318 @@ app.get("/onboard/link-wallet", (req, res) => {
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Link Wallet — Bobo Community</title>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Space+Mono&display=swap" rel="stylesheet">
   <style>
-    :root{--bg:#0B0D17;--card:rgba(255,255,255,0.03);--border:rgba(255,255,255,0.08);--text:#F3F4F6;--muted:#9CA3AF;--primary:#9333EA;--primary-h:#A855F7;--accent:#22D3EE;--success:#10B981;--error:#EF4444}
-    *{box-sizing:border-box;margin:0;padding:0}
-    body{font-family:'Outfit',sans-serif;background:var(--bg);background-image:radial-gradient(circle at 10% 20%,rgba(147,51,234,.1) 0%,transparent 40%),radial-gradient(circle at 90% 80%,rgba(34,211,238,.08) 0%,transparent 40%);color:var(--text);min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:2rem}
-    .container{max-width:520px;width:100%;background:var(--card);border:1px solid var(--border);backdrop-filter:blur(16px);border-radius:24px;padding:3rem 2.5rem;box-shadow:0 20px 40px rgba(0,0,0,.5);animation:fadeIn .7s ease-out}
-    @keyframes fadeIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-    .logo{text-align:center;font-size:2.5rem;margin-bottom:.5rem}
-    h1{font-size:1.75rem;font-weight:800;text-align:center;background:linear-gradient(135deg,#fff 30%,var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:.5rem}
-    .subtitle{font-size:.9rem;color:var(--muted);text-align:center;margin-bottom:2rem;line-height:1.5}
-    .step{background:rgba(255,255,255,.015);border:1px solid rgba(255,255,255,.04);border-radius:16px;padding:1.25rem 1.5rem;margin-bottom:1.25rem;transition:all .3s}
-    .step.active{border-color:rgba(147,51,234,.4);background:rgba(147,51,234,.03);box-shadow:0 0 20px rgba(147,51,234,.06)}
-    .step-head{display:flex;align-items:center;gap:.85rem;margin-bottom:.6rem}
-    .step-num{width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.8rem;color:var(--muted);flex-shrink:0}
-    .step.active .step-num{background:var(--primary);color:#fff}
-    .step-title{font-size:1rem;font-weight:600}
-    .step-desc{font-size:.85rem;color:var(--muted);margin-bottom:.9rem;line-height:1.4}
-    .btn{width:100%;padding:.8rem;border-radius:12px;border:none;font-family:inherit;font-size:.95rem;font-weight:600;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:.5rem}
-    .btn-primary{background:var(--primary);color:#fff}
-    .btn-primary:hover:not(:disabled){background:var(--primary-h);transform:translateY(-1px)}
-    .btn-primary:disabled{opacity:.45;cursor:not-allowed}
-    .btn-secondary{background:rgba(255,255,255,.08);color:var(--text)}
-    .badge{display:inline-flex;align-items:center;gap:.35rem;padding:.2rem .7rem;border-radius:9999px;font-size:.72rem;font-weight:600;margin-top:.4rem}
-    .badge.ok{background:rgba(16,185,129,.1);color:var(--success)}
-    .badge.err{background:rgba(239,68,68,.1);color:var(--error)}
-    .mono{font-family:'Space Mono',monospace;font-size:.72rem;background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.05);border-radius:8px;padding:.6rem;margin-top:.6rem;word-break:break-all;color:var(--accent)}
-    .log-box{margin-top:1.75rem;border-top:1px solid var(--border);padding-top:1.25rem}
-    .log-label{font-size:.8rem;font-weight:600;color:var(--muted);margin-bottom:.5rem}
-    .log{font-family:'Space Mono',monospace;font-size:.72rem;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.03);border-radius:10px;padding:.85rem;max-height:130px;overflow-y:auto;color:var(--muted);line-height:1.6}
-    .log .e{color:var(--error)}.log .s{color:var(--success)}.log .i{color:var(--accent)}
+    @font-face {
+      font-family: 'Ugly Dave';
+      src: url('https://ai.bobolabs.xyz/fonts/ugly-dave.woff2') format('woff2');
+      font-weight: normal;
+      font-style: normal;
+      font-display: swap;
+    }
+    :root {
+      --color-primary-red: #be0129;
+      --color-earthy-brown: #6f452d;
+      --color-warning-yellow: #f9ca71;
+      --color-pitch-black: #261c1a;
+      --color-stark-white: #fee1bf;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Ugly Dave', sans-serif;
+      background-color: var(--color-stark-white);
+      color: var(--color-pitch-black);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+      position: relative;
+    }
+    .top-bar {
+      position: absolute;
+      top: 1.5rem;
+      left: 1.5rem;
+      z-index: 100;
+    }
+    .logo-link {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      text-decoration: none;
+      transition: transform 100ms ease;
+    }
+    .logo-link:hover {
+      transform: scale(1.05);
+    }
+    .bobo-logo {
+      width: 40px;
+      height: 40px;
+    }
+    .bobo-logotype {
+      height: 18px;
+    }
+    .container {
+      max-width: 550px;
+      width: 100%;
+      background: var(--color-stark-white);
+      border: 3px solid var(--color-pitch-black);
+      border-radius: 255px 15px 225px 15px/15px 225px 15px 255px;
+      box-shadow: 6px 6px 0px 0px var(--color-pitch-black);
+      padding: 3rem 2.5rem;
+      animation: fadeIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      margin-top: 4rem;
+      margin-bottom: 2rem;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .logo-emoji {
+      text-align: center;
+      font-size: 3rem;
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-size: 2.2rem;
+      font-weight: 900;
+      text-align: center;
+      text-transform: uppercase;
+      margin-bottom: 0.5rem;
+      line-height: 1.1;
+    }
+    .subtitle {
+      font-size: 1.05rem;
+      text-align: center;
+      margin-bottom: 2.5rem;
+      line-height: 1.4;
+    }
+    .step {
+      background: var(--color-stark-white);
+      border: 3px solid var(--color-pitch-black);
+      border-radius: 15px 255px 15px 225px/225px 15px 255px 15px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      transition: all 150ms ease;
+    }
+    .step.active {
+      background: #fff;
+      box-shadow: 4px 4px 0px 0px var(--color-pitch-black);
+    }
+    .step:not(.active) {
+      opacity: 0.6;
+      background: rgba(38, 28, 26, 0.03);
+    }
+    .step-head {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+      margin-bottom: 0.6rem;
+    }
+    .step-num {
+      width: 32px;
+      height: 32px;
+      border: 3px solid var(--color-pitch-black);
+      border-radius: 50%;
+      background: var(--color-stark-white);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      font-size: 1.1rem;
+      color: var(--color-pitch-black);
+      flex-shrink: 0;
+    }
+    .step.active .step-num {
+      background: var(--color-primary-red);
+      color: var(--color-stark-white);
+    }
+    .step-title {
+      font-size: 1.25rem;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+    .step-desc {
+      font-size: 1rem;
+      margin-bottom: 1rem;
+      line-height: 1.4;
+    }
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 0.9rem;
+      font-family: 'Ugly Dave', sans-serif;
+      font-size: 1.25rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      text-align: center;
+      text-decoration: none;
+      border: 3px solid var(--color-pitch-black);
+      box-shadow: 4px 4px 0px 0px var(--color-pitch-black);
+      border-radius: 255px 15px 225px 15px/15px 225px 15px 255px;
+      cursor: pointer;
+      transition: transform 100ms ease, box-shadow 100ms ease, background-color 100ms ease, color 100ms ease;
+    }
+    .btn-primary {
+      background-color: var(--color-primary-red);
+      color: var(--color-stark-white);
+    }
+    .btn-primary:hover:not(:disabled) {
+      background-color: var(--color-stark-white);
+      color: var(--color-pitch-black);
+      transform: translate(2px, 2px);
+      box-shadow: 2px 2px 0px 0px var(--color-pitch-black);
+    }
+    .btn-primary:disabled {
+      background-color: #d3c0ad;
+      color: #6f5945;
+      cursor: not-allowed;
+      box-shadow: none;
+      transform: none;
+    }
+    .btn-secondary {
+      background-color: var(--color-earthy-brown);
+      color: var(--color-stark-white);
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background-color: var(--color-stark-white);
+      color: var(--color-pitch-black);
+      transform: translate(2px, 2px);
+      box-shadow: 2px 2px 0px 0px var(--color-pitch-black);
+    }
+    .btn-secondary:disabled {
+      background-color: #d3c0ad;
+      color: #6f5945;
+      cursor: not-allowed;
+      box-shadow: none;
+      transform: none;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.3rem 0.8rem;
+      border: 2px solid var(--color-pitch-black);
+      border-radius: 120px 10px 110px 10px/10px 110px 10px 120px;
+      font-size: 0.85rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      margin-top: 0.5rem;
+    }
+    .badge.ok {
+      background-color: var(--color-warning-yellow);
+      color: var(--color-pitch-black);
+      box-shadow: 2px 2px 0px 0px var(--color-pitch-black);
+    }
+    .badge.err {
+      background-color: var(--color-primary-red);
+      color: var(--color-stark-white);
+      box-shadow: 2px 2px 0px 0px var(--color-pitch-black);
+    }
+    .mono {
+      font-family: monospace;
+      font-size: 0.8rem;
+      background: rgba(38, 28, 26, 0.05);
+      border: 2px solid var(--color-pitch-black);
+      border-radius: 8px;
+      padding: 0.6rem;
+      margin-top: 0.6rem;
+      word-break: break-all;
+      color: var(--color-earthy-brown);
+      font-weight: 700;
+    }
+    .log-box {
+      margin-top: 2rem;
+      border-top: 3px solid var(--color-pitch-black);
+      padding-top: 1.5rem;
+    }
+    .log-label {
+      font-size: 1.25rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      margin-bottom: 0.75rem;
+    }
+    .log {
+      font-family: monospace;
+      font-size: 0.8rem;
+      background: #261c1a;
+      border: 3px solid var(--color-pitch-black);
+      border-radius: 15px 255px 15px 225px/225px 15px 255px 15px;
+      padding: 1rem;
+      max-height: 150px;
+      overflow-y: auto;
+      color: #fee1bf;
+      line-height: 1.6;
+    }
+    .log .e { color: #f94144; font-weight: bold; }
+    .log .s { color: #90be6d; font-weight: bold; }
+    .log .i { color: #f9ca71; font-weight: bold; }
+    
+    .token-item {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.6rem 0.5rem;
+      border-bottom: 2px solid var(--color-pitch-black);
+      cursor: pointer;
+    }
+    .token-item:last-child {
+      border-bottom: none;
+    }
+    .token-cb {
+      accent-color: var(--color-primary-red);
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+    }
+    
+    /* Custom scrollbar matching BOBO OS style */
+    .custom-scroll::-webkit-scrollbar {
+      width: 8px;
+    }
+    .custom-scroll::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background-color: var(--color-earthy-brown);
+      border: 2px solid var(--color-pitch-black);
+      border-radius: 4px;
+    }
+    @media (max-width: 640px) {
+      .top-bar {
+        top: 1rem;
+        left: 1rem;
+      }
+      .bobo-logo {
+        width: 32px;
+        height: 32px;
+      }
+      .bobo-logotype {
+        height: 14px;
+      }
+      .container {
+        padding: 2rem 1.25rem;
+        margin-top: 3.5rem;
+      }
+      h1 {
+        font-size: 1.8rem;
+      }
+    }
   </style>
 </head>
 <body>
+  <div class="top-bar">
+    <a href="https://bobolabs.xyz/" target="_blank" rel="noopener noreferrer" class="logo-link">
+      <img src="https://ai.bobolabs.xyz/images/bobo-logo.png" alt="Bobo Logo" class="bobo-logo">
+      <img src="https://ai.bobolabs.xyz/images/bobo-logotype.png" alt="Bobo" class="bobo-logotype">
+    </a>
+  </div>
+
   <div class="container">
-    <div class="logo">🪙</div>
+    <div class="logo-emoji">🐻🪙</div>
     <h1>Link Your Wallet</h1>
     <div class="subtitle">Connect your Solana wallet so your posts appear under your on-chain identity in the BOBO community room.</div>
 
@@ -3440,11 +3999,11 @@ app.get("/onboard/link-wallet", (req, res) => {
     <div class="step" id="s4">
       <div class="step-head"><div class="step-num">4</div><div class="step-title">Select Communities</div></div>
       <div class="step-desc">Select which communities you want to automatically forward your tweets to (must hold >$8).</div>
-      <div id="tokens-loading" style="display:none; color:var(--muted); font-size:0.9rem; margin-bottom:1rem;">Scanning wallet...</div>
-      <div id="tokens-list" style="max-height: 200px; overflow-y: auto; margin-bottom: 1rem; border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem; display:none;"></div>
+      <div id="tokens-loading" style="display:none; color:var(--color-earthy-brown); font-size:1.1rem; font-weight:900; text-transform:uppercase; margin-bottom:1rem;">Scanning wallet...</div>
+      <div id="tokens-list" class="custom-scroll" style="max-height: 200px; overflow-y: auto; margin-bottom: 1rem; border: 3px solid var(--color-pitch-black); border-radius: 12px; padding: 0.5rem; display:none;"></div>
       <div style="display:none; justify-content:space-between; margin-bottom: 1rem;" id="tokens-actions">
-        <button class="btn" style="background:transparent; border:1px solid var(--border); padding:0.4rem 0.8rem; font-size:0.8rem; cursor:pointer;" onclick="window.selectAll()">Select All</button>
-        <button class="btn" style="background:transparent; border:1px solid var(--border); padding:0.4rem 0.8rem; font-size:0.8rem; cursor:pointer;" onclick="window.deselectAll()">Deselect All</button>
+        <button class="btn" style="flex:1; margin-right:0.5rem; background:transparent; padding:0.5rem; font-size:1rem; cursor:pointer;" onclick="window.selectAll()">Select All</button>
+        <button class="btn" style="flex:1; margin-left:0.5rem; background:transparent; padding:0.5rem; font-size:1rem; cursor:pointer;" onclick="window.deselectAll()">Deselect All</button>
       </div>
       <button class="btn btn-primary" id="btn-save-communities" style="display:none;">Save Selection &amp; Finish</button>
       <div id="final-finish" style="display:none; margin-top:1rem;"><div class="badge ok">✓ All done! You can close this page.</div></div>
@@ -3452,7 +4011,7 @@ app.get("/onboard/link-wallet", (req, res) => {
 
     <div class="log-box">
       <div class="log-label">Activity Log</div>
-      <div class="log" id="log"><span class="i">[System] Ready. Please connect your wallet.</span></div>
+      <div class="log custom-scroll" id="log"><span class="i">[System] Ready. Please connect your wallet.</span></div>
     </div>
   </div>
 
@@ -3553,7 +4112,7 @@ app.get("/onboard/link-wallet", (req, res) => {
             document.getElementById('tokens-actions').style.display = 'flex';
             document.getElementById('btn-save-communities').style.display = 'block';
             if (!data.tokens || data.tokens.length === 0) {
-              list.innerHTML = '<div style="color:var(--muted); text-align:center; padding:1rem;">No tokens > $8 found. Default $BOBO access applied.</div>';
+              list.innerHTML = '<div style="color:var(--color-earthy-brown); text-align:center; padding:1rem; font-weight:900; text-transform:uppercase;">No tokens > $8 found. Default $BOBO access applied.</div>';
             } else {
               list.innerHTML = data.tokens.map(t => {
                 const label = (t.symbol || t.name || t.mint.substring(0,8) + '...');
